@@ -6,11 +6,18 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M0 complete (2026-05-03). Ready to begin M1.
+**Phase:** M1 complete (2026-05-04). Ready to begin M2.
 
-**Next action:** Begin **M1 — GPX I/O and project file format** (see roadmap below). Start with the data model in `Models/` (`GPXSession`, `Track`, `Segment`, `TrackPoint`, `Waypoint`), then `GPXParser`/`GPXWriter` in `Services/` using stdlib `XMLParser`. M1 also wants a few real-world GPX fixtures committed under `GPXEditorTests/Fixtures/` (Garmin, Strava, hand-edited) — see "Open inputs" item 2.
+All eight M1 implementation tasks shipped:  Models/ data layer, GPXParser, GPXWriter, 14 synthetic test fixtures, ProjectFile JSON codec, FileDocument + DocumentGroup + UTI registration, Import GPX action, Reset to Original.  58 tests passing.  The full I/O loop is verified end-to-end:  Import GPX → save `.gpxeditor` project → reopen → edit → Reset to Original returns the track to its as-imported state with identity (UUID) and master/subsidiary role preserved.
 
-**Blockers, if any:** None for M0–M9. M10 is gated on the Apple Developer Program membership becoming active and the Developer ID Application certificate being installed in the developer's keychain. See "Open inputs" below for the current state of the cert progress.
+Two project-wide infrastructure improvements landed alongside M1, each documented as a reusable best-practice procedure under `Docs/`:
+
+- **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
+- **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
+
+**Next action:** Begin **M2 — Map view and basemap selector** (see roadmap below).  Before implementation, the per-subsystem directive `Docs/02_MAP_AND_BRIDGE.md` (currently a stub) needs its substantive body — the JS↔Swift bridge protocol, message-type catalog, and initialization sequence are specified at the stub level but the schemas need detail before code lands.  M2 also needs the user's input on Open Inputs #3 (NOAA Charts endpoint verification) and #4 (CyclOSM mirror selection) before SECURITY.md's network allow-list can be finalized.
+
+**Blockers, if any:** None for M2–M9. M10 is gated on the Apple Developer Program membership becoming active and the Developer ID Application certificate being installed in the developer's keychain. See "Open inputs" below for the current state of the cert progress.
 
 ## Milestone roadmap
 
@@ -27,13 +34,20 @@ This milestone produces the empty shell everything else builds onto. A working `
 - **`com.apple.security.get-task-allow` is auto-injected by Xcode for Debug-signed builds** so the debugger can attach. It is stripped automatically from Release / notarization-bound builds. Universal across macOS dev projects. Not in `SECURITY.md`'s entitlement list because that doc lists what we *grant* (feature capabilities); `get-task-allow` is a tooling artifact at signing time. A reader running `codesign -d --entitlements -` on a Debug build will see five entitlements where SECURITY.md lists four. If a clarifying paragraph in SECURITY.md becomes desirable, add it under "Sandbox entitlements".
 - **Empty type-kind folders are not preserved across a fresh clone.** Xcode 16's `PBXFileSystemSynchronizedRootGroup` treats `.gitkeep`-style placeholder files as bundle resources and tries to copy each into `Contents/Resources/` — they collide on filename and break the build. Rather than add `PBXFileSystemSynchronizedBuildFileExceptionSet` membership exceptions to filter them out, the `.gitkeep` files were dropped. Empty folders (`Models/`, `Services/`, `ViewModels/`, `Components/`, `WebResources/`) therefore won't survive a fresh clone — they get recreated when their first real file is added (M1 populates `Models/` and `Services/` immediately, M2 populates `WebResources/`, M5 `Components/`, M8 `ViewModels/`). Folder structure is canonical-documented in CLAUDE.md so the loss is purely cosmetic.
 
-### M1 — GPX I/O and project file format
+### M1 — GPX I/O and project file format — **Completed 2026-05-04**
 
 Implement the data model in `Models/`: `GPXSession`, `Track`, `Segment`, `TrackPoint`, `Waypoint`, project metadata types, master/subsidiary role enum, hex color storage. Implement `GPXParser` and `GPXWriter` in `Services/` using stdlib `XMLParser` (no third-party GPX library — see D-007). Implement the `.gpxeditor` JSON project file format encode/decode in `Services/`. Wire up SwiftUI's `FileDocument` for the `.gpxeditor` content type so File→Open, File→Save, File→Save As work via standard menus and dialogs. Implement an Import GPX action that reads a `.gpx` file via `NSOpenPanel`, parses it, and adds it to the current session as a new track with its original bytes preserved (D-008). Implement Reset to Original per track.
 
 Tests in `GPXEditorTests/Services/`: round-trip a half-dozen real-world GPX files (Garmin, Strava, hand-edited) through parser and writer; assert that re-parsing the output produces an equivalent model.
 
 Verify: New empty project, Import a real GPX, Save, Close, Reopen, see the same state. Export the original GPX (round-trip preservation check).
+
+**M1 outcome notes (deviations and follow-ups):**
+
+- **Real-world fixtures deferred.** M1 ships with 14 synthetic Null-Island-anchored fixtures only (covering GPX 1.0 / 1.1, multi-segment, missing fields, degenerate counts, waypoints, vendor extensions, fractional timestamps, plus six failure-case fixtures — one per `GPXParseError` case).  Real Garmin / Strava / hand-edited recordings remain on Open Inputs #2 and would add coverage for genuinely-encountered-in-the-wild quirks (vendor-prefixed namespaces in unusual positions, encoding edge cases, extension-block variations beyond the canonical Garmin TrackPointExtension shape) — but the synthetic set covers all the parser failure modes and structural variants explicitly tested.  Add real fixtures opportunistically as Scott captures them; nothing in subsequent milestones is blocked.
+- **Reset to Original UI not wired in.** The model-level `TrackImporter.resetTrackToOriginal(_:paletteOffset:)` operation is implemented and tested, but Reset is per-track and the proper UI affordance is the sidebar's per-track right-click menu (D-014, `Docs/04_EDITING.md`).  The sidebar lands at M8.  M8 wires the menu / contextual-menu to call into the M1 operation; nothing more is needed at the model layer.
+- **GPX 1.0 metadata extended from M1's design pass.** The parser's `<name>` and `<time>` switch arms accept parent `<gpx>` (the GPX 1.0 placement of file-level metadata) in addition to parent `<metadata>` (the GPX 1.1 placement).  Originally the design assumed 1.1-only metadata routing; the gap was closed during fixture-#2 work after a domain-knowledge consult with the user.
+- **`ContentView` is still the M0 placeholder** showing only the project name + track count.  This is deliberate:  the real editing UI is M5 (Point Tool single-point operations) and M8 (sidebar / inspector / stats).  At M1 the track count display is the simplest correctness signal that opening / creating / saving documents works end-to-end.
 
 ### M2 — Map view and basemap selector
 
@@ -101,7 +115,7 @@ Things still pending from the user, in roughly priority order:
 
 **1. Apple Developer Program membership.** In progress; weeks away per the user. Blocks only M10 (signing/notarization/distribution). All earlier milestones use the free Personal Team for local development. Update this entry with the date the certificate becomes active and is installed in the keychain.
 
-**2. Real GPX samples for `GPXEditorTests/Fixtures/`.** Needed for M1 testing — round-trip parser tests work best against real-world files with their real-world quirks (Garmin extensions, Strava elevations, varying namespace declarations). Public-trail recordings are fine during the private-repo phase (D-005). At least one "messy" example with rest-stop clusters and elevation noise is useful for testing the editing features in M3 onward. Update this entry with the file paths added and a one-line description of each.
+**2. Real GPX samples for `GPXEditorTests/Fixtures/`.** M1 shipped with 14 synthetic Null-Island fixtures only.  Real-world recordings would add coverage for in-the-wild quirks (Garmin extension variations, Strava-specific behaviors, namespace declarations in unusual positions, encoding edge cases) and are useful for the editing features starting at M3 — at least one "messy" example with rest-stop clusters and elevation noise is the canonical test input for spike detection (M-future).  Public-trail recordings are fine during the private-repo phase (D-005); naming convention is `garmin-<descriptor>.gpx`, `strava-<descriptor>.gpx`, etc., per `Docs/06_FIXTURES.md`.  Update this entry with the file paths added and a one-line description of each.  Not blocking any milestone — add opportunistically.
 
 **3. M2 verification: NOAA Charts tile endpoint.** The current state of NOAA's chart tile service needs to be verified during M2. If a clean XYZ-style tile URL is available, NOAA Charts is included. If the integration is awkward (WMS or ESRI MapServer with extra wiring), NOAA is deferred to a future milestone — note it in the Deferred parking lot below and update SECURITY.md's network allow-list to remove the NOAA domain.
 
