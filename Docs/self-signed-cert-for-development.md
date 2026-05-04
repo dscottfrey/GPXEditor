@@ -158,9 +158,19 @@ Expected — Gatekeeper checks against Apple-trusted issuers, and a self-signed 
 
 True, but the self-signed cert satisfies this requirement just fine. No special handling needed.
 
-### Library validation blocks loading frameworks signed by other teams
+### Library validation blocks loading dylibs that don't share a TeamIdentifier
 
-If your app uses third-party SPM packages or frameworks, they're typically not signed (SPM dependencies build from source) so library validation is fine. But if you embed a pre-built framework signed by someone else's team, library validation rejects it. Solutions: build the framework from source, or disable library validation via the `com.apple.security.cs.disable-library-validation` Hardened Runtime exception entitlement (which weakens security and should be a separate, deliberate decision).
+This is the biggest gotcha and you will hit it. Library validation (a Hardened Runtime feature, on by default) requires every dynamic library loaded into the host process to have a matching `TeamIdentifier` in its code signature. **Self-signed certificates have `TeamIdentifier=not set`, and "not set" does not count as a positive match** — even when the host and the loaded library are signed with the exact same self-signed cert.
+
+This breaks two distinct things:
+
+1. **Xcode 16's debug-dylib feature.** Xcode 16's default Debug-build pattern splits the app into a thin executable + a separate `.debug.dylib`. The wrapper `dlopen`s the dylib at launch. Library validation rejects the load. The app crashes at launch with `EXC_CRASH (SIGABRT)`; the crash log says `Library not loaded: @rpath/<App>.debug.dylib ... code signature ... not valid for use in process: mapping process and mapped file (non-platform) have different Team IDs`. **Fix:** set Build Setting `Enable Debug Dylib Support` (`ENABLE_DEBUG_DYLIB`) to `No` for the app target. Produces a monolithic Debug build (no separate dylib to load).
+
+2. **XCTest test bundles.** When tests run, the host app `dlopen`s the `.xctest` bundle. Library validation rejects this exactly the same way. The crash report says `Failed to load the test bundle ... mapping process and mapped file (non-platform) have different Team IDs`. **Fix:** add `com.apple.security.cs.disable-library-validation` to the Hardened Runtime exceptions, but ONLY in Debug.
+
+**Implementation for fix 2 — separate Debug entitlements file:** create a copy of the production entitlements file named e.g. `<App>.Debug.entitlements` that contains everything in the production file plus the `disable-library-validation` exception. Then in Xcode → target → Build Settings, search for `Code Signing Entitlements` and **expand the row to per-configuration values**. Set Debug to point at the new file; keep Release pointing at the original. This way Debug can run tests, while Release retains strict library validation. Document the Debug-only relaxation in your project's SECURITY.md (or equivalent) and remove it at the milestone where you switch back to a real Developer ID certificate.
+
+For embedded frameworks signed by someone else's team, the same library-validation rules apply. SPM dependencies build from source so they pose no problem; pre-built third-party frameworks need either their own re-signing or the same Debug-only exception (which carries the same security trade-off).
 
 ### Don't forget to switch back before shipping
 

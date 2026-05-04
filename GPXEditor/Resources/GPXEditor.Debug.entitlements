@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    GPXEditor.Debug.entitlements
+
+    The Debug-configuration variant of the application's entitlements.  Loaded
+    via the per-configuration CODE_SIGN_ENTITLEMENTS build setting, which points
+    at GPXEditor.entitlements for Release and at this file for Debug.
+
+    What this file contains: every entitlement from the production file (which
+    is the source of truth — see SECURITY.md "Sandbox entitlements"), PLUS
+    one Hardened Runtime exception that is required during development with
+    a self-signed code-signing certificate (D-019):
+
+        com.apple.security.cs.disable-library-validation
+
+    Why the exception is needed:  Hardened Runtime's library validation
+    requires every dynamic library loaded into the host process to have a
+    matching TeamIdentifier in its code signature.  Self-signed certificates
+    do not carry a TeamIdentifier (the value is literally "not set"), and
+    "not set" does not count as a positive match — even when the host and
+    the loaded library are signed with the exact same self-signed cert.
+    The result is that XCTest test bundles cannot be loaded into the host
+    app process at test time, which breaks the entire test suite under
+    self-signed signing.
+
+    Disabling library validation in Debug only restores test loading without
+    weakening the production posture.  The Release-configuration build
+    continues to use GPXEditor.entitlements (no exception), so the shipped
+    binary's Hardened Runtime stays strict.
+
+    This entire file disappears at M10 when the project switches to a
+    Developer ID Application certificate.  At that point CODE_SIGN_ENTITLEMENTS
+    can be reverted to a single file, library validation re-enables for Debug,
+    and SECURITY.md's invariant ("no Hardened Runtime exception entitlements
+    are granted") is fully restored.
+
+    Any change to this file requires a same-commit update to SECURITY.md.
+-->
+<plist version="1.0">
+<dict>
+    <!--
+        Same as GPXEditor.entitlements.  Enables App Sandbox.  Mandatory for
+        the project per SECURITY.md and per Decision D-007's posture statement.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!--
+        Same as GPXEditor.entitlements.  Allows the app to read user-chosen
+        files via NSOpenPanel.
+    -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+
+    <!--
+        Same as GPXEditor.entitlements.  Allows the app to write to user-
+        chosen files via NSSavePanel.
+    -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!--
+        Same as GPXEditor.entitlements.  Allows outbound network connections
+        for tile servers and the elevation API.  Per-domain enforcement is
+        implemented in application code (NetworkAllowList, WKContentRuleList).
+    -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!--
+        Debug-only Hardened Runtime exception.  Disables library validation
+        so XCTest can dlopen the test bundle into the host process when both
+        are signed with a self-signed certificate that has no TeamIdentifier.
+        Required only during the D-019 self-signed development era; absent
+        from GPXEditor.entitlements (the Release file) so the shipped binary
+        retains strict library validation.
+
+        Removed at M10 along with the switch to Developer ID Application
+        signing — see SECURITY.md "Code signing and notarization".
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
