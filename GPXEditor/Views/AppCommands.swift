@@ -133,7 +133,13 @@ struct AppCommands: Commands {
             $document.wrappedValue?.session.tracks.append(contentsOf: newTracks)
 
         case .failure(let parseError):
-            presentImportError("Couldn't import GPX: \(parseError)")
+            // Use the localized description (defined in
+            // GPXParseError+LocalizedError) instead of Swift's raw enum
+            // interpolation — the latter produces developer-y output
+            // like "malformedTimestamp(value: \"…\")" that fails the
+            // CONVENTIONS.md "describe, don't accuse" rule for user-
+            // facing errors.
+            presentImportError(parseError.localizedDescription)
         }
     }
 

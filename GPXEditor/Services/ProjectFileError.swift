@@ -29,3 +29,21 @@ public enum ProjectFileError: Error, Equatable, Sendable {
     /// have to handle DecodingError's many cases.
     case decodingFailed(message: String)
 }
+
+// MARK: - LocalizedError
+
+extension ProjectFileError: LocalizedError {
+
+    /// Human-readable description surfaced to the user via NSAlert or
+    /// SwiftUI's standard error-presentation paths.  Phrasing follows
+    /// the "describe, don't accuse" rule from CONVENTIONS.md.
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedFormatVersion(let version):
+            return "This project file declares format version \(version). This build of GPXeditor reads up to format version \(ProjectFile.currentFormatVersion). The file may have been saved by a newer version of GPXeditor."
+
+        case .decodingFailed(let message):
+            return "Couldn't read the project file's contents. \(message)"
+        }
+    }
+}

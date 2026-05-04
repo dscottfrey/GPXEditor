@@ -17,6 +17,13 @@ import Foundation
 /// All the ways `GPXParser.parse(_:)` can fail.  Equatable so tests can
 /// assert specific failure cases; the underlying types of associated values
 /// are simple (String, optionals) for the same reason.
+///
+/// Conforms to `LocalizedError` so the standard NSAlert / SwiftUI .alert
+/// path picks up human-readable per-case messages instead of Swift's
+/// raw enum-reflection output.  Per CONVENTIONS.md "Error messages
+/// describe, don't accuse," each message names what the parser tried
+/// to do and what it observed, without making claims about what the
+/// user's file "is" or "isn't" — those are the user's call to make.
 public enum GPXParseError: Error, Equatable, Sendable {
 
     /// XMLParser reported a syntactic error or the document was otherwise
@@ -51,4 +58,37 @@ public enum GPXParseError: Error, Equatable, Sendable {
     /// A `<time>` child element's text couldn't be parsed as ISO 8601.
     /// `value` is the offending string.
     case malformedTimestamp(value: String)
+}
+
+// MARK: - LocalizedError
+
+extension GPXParseError: LocalizedError {
+
+    /// Human-readable description surfaced to the user via NSAlert or
+    /// SwiftUI's standard error-presentation paths.  Phrasing follows
+    /// the "describe, don't accuse" rule from CONVENTIONS.md:  each
+    /// message names the parser's operation, what it expected, and
+    /// what it observed — without claiming what the user's file "is."
+    public var errorDescription: String? {
+        switch self {
+        case .invalidXML(let message):
+            return "Couldn't read the file's XML. \(message)"
+
+        case .unsupportedVersion(let version):
+            return "This file declares GPX version '\(version)'. GPXeditor reads versions 1.0 and 1.1."
+
+        case .malformedCoordinate(let element, let attribute, let value):
+            let observed = value.map { "'\($0)'" } ?? "(empty)"
+            return "Couldn't read the '\(attribute)' value \(observed) in a <\(element)> as a number."
+
+        case .missingRequiredAttribute(let element, let attribute):
+            return "A <\(element)> element doesn't have a '\(attribute)' attribute. GPX requires it."
+
+        case .unexpectedRootElement(let found):
+            return "Expected a <gpx> root element, found <\(found)> instead. The file may be malformed, or another XML format may have been saved with a .gpx extension."
+
+        case .malformedTimestamp(let value):
+            return "Couldn't read the timestamp '\(value)'. GPX expects ISO 8601 format like 2026-01-01T12:00:00Z."
+        }
+    }
 }

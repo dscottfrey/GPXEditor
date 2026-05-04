@@ -38,6 +38,18 @@ Errors must surface. Three concrete rules:
 
 The principle: a future maintainer reading the code should be able to tell, from the code, what every failure path does. Silent swallowing makes that impossible.
 
+### Error messages describe, don't accuse
+
+When an error reaches the user — NSAlert, SwiftUI `.alert`, a UI banner, any log line the user might see — describe **what happened**, not what their file, input, or intent **is**. Three concrete rules:
+
+- **Lead with the operation, not a verdict.** "Couldn't read this as GPX:" — not "This isn't a GPX file." The user knows what they intended; it's not the app's place to tell them they're wrong about it.
+- **Name what was expected and what was observed.** Specificity gives the user something to act on. "Expected `<gpx>` root element, found `<svg>` instead" beats "wrong format" by a wide margin — the first invites diagnosis, the second invites argument.
+- **Acknowledge plausible alternatives when the cause is ambiguous.** "The file may be corrupted, or it may be a different XML format saved with a .gpx extension" — let the user weigh which explanation fits their context. They have it; the app doesn't.
+
+The anti-pattern this rule blocks: "This file isn't a GPX document — its root element is `<svg>`." That's a verdict about the user's file (it claims to know what the file *isn't*) presented as a fact, when the parser only knows what it *observed*. The user reading that message wants to push back ("but it *is* a GPX file, just malformed"), and they're right to.
+
+Applies to every format parser, every input validator, every error path that surfaces text to the user. Pure-developer log lines (e.g., `os_log` traces gated by build configuration) can be more terse and developer-y; user-facing errors get the full descriptive treatment.
+
 ### No personal data, no telemetry, no version checks
 
 The application makes no network calls beyond those documented in `SECURITY.md`. No analytics. No crash reporting service. No "phone home" for version checks. No build-time or run-time data collection of any kind. Adding any of these is a `D-XXX` decision in DECISIONS.md plus an update to SECURITY.md's network allow-list — not a routine code change.
