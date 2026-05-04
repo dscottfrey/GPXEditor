@@ -1,0 +1,74 @@
+# GPXeditor — repository ignore rules
+#
+# Three kinds of things live in this file:
+#   1. macOS, Xcode, and Swift build/IDE artifacts that should never be committed
+#      regardless of repo visibility.
+#   2. Personal-data and credential artifacts that must never be committed
+#      regardless of repo visibility, per SECURITY.md and D-005.
+#   3. Session-handoff scratch files used during development that aren't
+#      project deliverables.
+# When updating this file, prefer adding patterns over removing them — and
+# never relax the credential-block patterns without a SECURITY.md update.
+
+# ─── macOS ───────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# ─── Xcode build / IDE state ─────────────────────────────────────────────────
+# xcuserdata holds per-user UI state: window layouts, breakpoints, scheme
+# selections.  Each developer has their own; checking it in causes constant
+# spurious diffs.
+**/xcuserdata/
+**/*.xcuserstate
+build/
+DerivedData/
+
+# Swift Package Manager local cache (Package.resolved IS committed; D-007).
+.swiftpm/
+.build/
+
+# Xcode misc
+*.moved-aside
+*.xccheckout
+*.hmap
+
+# ─── Personal data — GPX tracks ──────────────────────────────────────────────
+# Per D-005, real-world GPX recordings may be committed during the private
+# development phase ONLY inside GPXEditorTests/Fixtures/, after a fixture-audit
+# review (rules in Docs/06_FIXTURES.md).  Anywhere else in the repo — and any
+# track on the repo root — is denied by default.  The allow-list below
+# re-enables fixtures explicitly.
+*.gpx
+!GPXEditorTests/Fixtures/*.gpx
+
+# Optional gitignored landing zone for one-off debugging tracks that should
+# never be committed.  Create on demand; tracks here remain local-only.
+GPXEditorTests/PrivateFixtures/
+
+# ─── Credentials and signing artifacts (NEVER COMMIT — visibility-independent) ─
+# These patterns are absolute per SECURITY.md "Personal data" and
+# "Code signing and notarization" sections.  Do not relax them when going
+# public; they are not visibility-aware.
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+notarization-credentials.json
+notarization-api-key.p8
+AuthKey_*.p8
+*.keychain-db
+
+# ─── Session-handoff scratch files (this development workflow only) ─────────
+# These are personal session-handoff notes used between Claude Code sessions
+# and are not part of the project deliverable.
+Cowork-Session-Handoff.md
+StartingPrompt-ClaudeCode.txt
+
+# ─── Claude Code per-developer state ─────────────────────────────────────────
+# .claude/settings.json (when present) is project-tracked and contains the
+# shared allow/deny rules that constrain unattended `claude -p` runs — see
+# CLAUDE.md "Workflow".  .claude/settings.local.json is per-developer and
+# accumulates personal command approvals; it stays local.
+.claude/settings.local.json
