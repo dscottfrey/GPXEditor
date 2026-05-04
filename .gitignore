@@ -90,3 +90,4 @@ StartingPrompt-ClaudeCode.txt
 # CLAUDE.md "Workflow".  .claude/settings.local.json is per-developer and
 # accumulates personal command approvals; it stays local.
 .claude/settings.local.json
+GPXEditor/Generated/BuildInfo.swift
