@@ -77,9 +77,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = D24608C02FA7FA4C00144E3D /* Build configuration list for PBXNativeTarget "GPXEditor" */;
 			buildPhases = (
+				D2ED72152FA935DA001B1B94 /* Generate BuildInfo */,
 				D246089B2FA7FA4B00144E3D /* Sources */,
 				D246089C2FA7FA4B00144E3D /* Frameworks */,
 				D246089D2FA7FA4B00144E3D /* Resources */,
+				D2ED72172FA93635001B1B94 /* Bump CFBundleVersion (Release only) */,
 			);
 			buildRules = (
 			);
@@ -173,6 +175,47 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D2ED72152FA935DA001B1B94 /* Generate BuildInfo */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate BuildInfo";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/generate_build_info.sh\" \"${SRCROOT}/GPXEditor/Generated/BuildInfo.swift\" \n";
+		};
+		D2ED72172FA93635001B1B94 /* Bump CFBundleVersion (Release only) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bump CFBundleVersion (Release only)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "${SRCROOT}/Scripts/bump_built_info_plist.sh\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D246089B2FA7FA4B00144E3D /* Sources */ = {
@@ -325,13 +368,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GPXEditor/Resources/GPXEditor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = B96HF9533R;
-				CODE_SIGN_ENTITLEMENTS = GPXEditor/Resources/GPXEditor.entitlements;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = GPXeditor;
 				INFOPLIST_KEY_CFBundleName = GPXeditor;
@@ -359,13 +403,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GPXEditor/Resources/GPXEditor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = B96HF9533R;
-				CODE_SIGN_ENTITLEMENTS = GPXEditor/Resources/GPXEditor.entitlements;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = GPXeditor;
 				INFOPLIST_KEY_CFBundleName = GPXeditor;
