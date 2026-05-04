@@ -66,6 +66,24 @@ AuthKey_*.p8
 Cowork-Session-Handoff.md
 StartingPrompt-ClaudeCode.txt
 
+# ─── Auto-generated build identifiers ───────────────────────────────────────
+# GPXEditor/Generated/BuildInfo.swift is rewritten on every build by the
+# "Generate BuildInfo" Run Script phase (Scripts/generate_build_info.sh).
+# It IS committed once so that PBXFileSystemSynchronizedRootGroup picks it
+# up at build-graph construction time on a fresh clone — the first build
+# would otherwise omit it from the binary.
+#
+# Each developer runs once after a fresh clone, to suppress the every-
+# build local-modification noise that would otherwise fill `git status`:
+#
+#     git update-index --skip-worktree GPXEditor/Generated/BuildInfo.swift
+#
+# The pattern below is documentation-of-intent.  Because the file is
+# tracked, the gitignore rule is inert — `--skip-worktree` is what
+# actually does the noise suppression.  The pattern still catches any
+# *other* file that ever lands under a Generated/ subfolder.
+**/Generated/BuildInfo.swift
+
 # ─── Claude Code per-developer state ─────────────────────────────────────────
 # .claude/settings.json (when present) is project-tracked and contains the
 # shared allow/deny rules that constrain unattended `claude -p` runs — see
