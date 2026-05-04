@@ -378,7 +378,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = GPXEditor/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = GPXeditor;
 				INFOPLIST_KEY_CFBundleName = GPXeditor;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -415,7 +416,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = GPXEditor/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = GPXeditor;
 				INFOPLIST_KEY_CFBundleName = GPXeditor;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";

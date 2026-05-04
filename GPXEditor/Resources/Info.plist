@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Info.plist
+
+    Hand-maintained replacement for Xcode's auto-generated Info.plist.
+    Auto-generation (GENERATE_INFOPLIST_FILE = YES) was abandoned in M1
+    task #7 because document-type registration requires array-of-dict
+    structures (CFBundleDocumentTypes, UTExportedTypeDeclarations) that
+    INFOPLIST_KEY_* build settings cannot express — there is no
+    INFOPLIST_KEY_CFBundleDocumentTypes.
+
+    The M0 outcome notes in HANDOFF.md anticipated this migration as
+    "option (c)" if "real friction surfaces"; document-type registration
+    is exactly that friction.  As a side benefit, the M0 deviation where
+    CFBundleName = PRODUCT_NAME = "GPXEditor" (capital E) silently
+    contradicted D-001 is resolved here:  this file sets both
+    CFBundleName and CFBundleDisplayName to "GPXeditor" (lowercase e),
+    which is what the standard About panel and Finder file metadata read.
+
+    Build-setting substitution via $(VAR) keeps version/SDK/exec values
+    centralized in the .pbxproj.  Anything that's truly project-fixed
+    (display names, copyright string, document-type entries) is hardcoded
+    here for clarity.
+
+    Any change to this file is a deliberate event:  app names, bundle
+    identifiers, document types, and entitlement-adjacent keys all
+    affect Launch Services behavior on the user's machine.  Don't edit
+    casually.
+-->
+<plist version="1.0">
+<dict>
+    <!-- ─── Bundle identity ──────────────────────────────────────── -->
+
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <!--
+        Both name keys carry the lowercase-e display string per D-001.
+        Resolves the M0 outcome note where auto-generation forced
+        CFBundleName to track PRODUCT_NAME (= "GPXEditor", capital E).
+    -->
+    <key>CFBundleName</key>
+    <string>GPXeditor</string>
+    <key>CFBundleDisplayName</key>
+    <string>GPXeditor</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+
+    <!--
+        CFBundleVersion is auto-bumped to a fresh timestamp on Release
+        builds by Scripts/bump_built_info_plist.sh post-Process Info.plist.
+        Source value (from $(CURRENT_PROJECT_VERSION) in .pbxproj) is what
+        Debug builds use unchanged.
+    -->
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+
+    <!-- ─── Launch Services / app metadata ──────────────────────── -->
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Scott Frey. MIT License.</string>
+
+    <!-- ─── Document types ──────────────────────────────────────── -->
+
+    <!--
+        CFBundleDocumentTypes declares which file types this app handles.
+        When the user double-clicks a .gpxeditor file in Finder, Launch
+        Services consults this list to decide which app to launch.
+        CFBundleTypeRole = "Editor" declares we can both read AND write
+        the type (vs. "Viewer" = read-only).  LSHandlerRank = "Owner"
+        declares this app is the canonical handler for the format
+        (vs. "Default" / "Alternate" / "None").
+    -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>GPXeditor Project</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.gpxeditor.project</string>
+            </array>
+        </dict>
+    </array>
+
+    <!--
+        UTExportedTypeDeclarations defines the .gpxeditor UTI itself.
+        We're the owner of the format, so it goes under "Exported"
+        rather than "Imported" (which is for re-declaring third-party
+        types).  conformsTo includes public.json (the file IS JSON
+        internally, so generic JSON-aware tools can read it) and
+        public.content (so search/index features see it as
+        user-content).  The filename-extension tag is what Launch
+        Services matches on for double-click handling.
+    -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.gpxeditor.project</string>
+            <key>UTTypeDescription</key>
+            <string>GPXeditor Project</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+                <string>public.content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>gpxeditor</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/json</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
