@@ -39,6 +39,12 @@ struct ContentView: View {
         }
         .padding()
         .frame(minWidth: 400, minHeight: 240)
+        // Publish this window's document binding into FocusedValues so
+        // menu commands (AppCommands.swift) can find the active document
+        // via @FocusedBinding(\.document).  .focusedSceneValue applies
+        // when the window is the focused scene; nil otherwise — exactly
+        // what we want for a per-window document binding.
+        .focusedSceneValue(\.document, $document)
     }
 }
 

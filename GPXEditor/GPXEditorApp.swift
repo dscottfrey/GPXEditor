@@ -41,6 +41,11 @@ struct GPXEditorApp: App {
                     AboutPanel.show()
                 }
             }
+
+            // App-level commands defined in AppCommands.swift — File ->
+            // Import GPX... at M1, more (Export GPX, Export KML, etc.)
+            // at later milestones.
+            AppCommands()
         }
     }
 }
