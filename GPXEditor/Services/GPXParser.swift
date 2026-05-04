@@ -303,22 +303,30 @@ private final class ParserDelegate: NSObject, XMLParserDelegate {
             // <name> appears in <metadata>, <trk>, and <wpt>.  Parent
             // context disambiguates.  Empty string is normalized to nil
             // so the importer's "no name supplied" fallback engages.
+            //
+            // The "metadata" / "gpx" parents both map to the file-level
+            // metadata name:  GPX 1.1 wraps file metadata in <metadata>,
+            // but GPX 1.0 places it as direct children of <gpx>.  We
+            // honor both placements so a 1.0 file's <name> isn't silently
+            // dropped.
             let value = trimmed.isEmpty ? nil : trimmed
             switch parent {
-            case "metadata": gpx.metadataName = value
-            case "trk":      currentTrack?.name = value
-            case "wpt":      currentWaypoint?.name = value
-            default:         break  // <name> in extensions or unknown context — ignore.
+            case "metadata", "gpx": gpx.metadataName = value
+            case "trk":             currentTrack?.name = value
+            case "wpt":             currentWaypoint?.name = value
+            default:                break  // <name> in extensions or unknown context — ignore.
             }
 
         case "time":
-            // <time> appears in <metadata>, <trkpt>, and <wpt>.  We only
-            // attempt to parse the timestamp when parent is a recognized
-            // container — a stray <time> inside <extensions> is ignored
-            // rather than raising .malformedTimestamp on something we
-            // never intended to consume.
+            // <time> appears in <metadata> (1.1) or directly in <gpx> (1.0)
+            // for the file-level recording time, plus inside <trkpt> and
+            // <wpt> for per-point timestamps.  We only attempt to parse
+            // the timestamp when parent is a recognized container — a
+            // stray <time> inside <extensions> is ignored rather than
+            // raising .malformedTimestamp on something we never intended
+            // to consume.
             switch parent {
-            case "metadata":
+            case "metadata", "gpx":
                 guard let date = parseDate(trimmed) else {
                     raise(.malformedTimestamp(value: trimmed), on: parser)
                     return

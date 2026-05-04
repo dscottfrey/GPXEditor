@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Mismatched closing tags
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001"/>
+    </trkseg>
+  </trk>
+</gpx>

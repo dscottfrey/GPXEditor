@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.0" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/0">
+  <name>Minimal 1.0 fixture</name>
+  <time>2026-01-01T00:00:00Z</time>
+  <trk>
+    <name>Synthetic Null Island stroll (1.0)</name>
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001">
+        <ele>10.0</ele>
+        <time>2026-01-01T00:00:00Z</time>
+      </trkpt>
+      <trkpt lat="0.0002" lon="0.0002">
+        <ele>11.0</ele>
+        <time>2026-01-01T00:00:10Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Multi-segment fixture</name>
+    <time>2026-01-01T00:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Track with two segments</name>
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001">
+        <ele>10.0</ele>
+      </trkpt>
+      <trkpt lat="0.0002" lon="0.0002">
+        <ele>11.0</ele>
+      </trkpt>
+    </trkseg>
+    <trkseg>
+      <trkpt lat="0.0010" lon="0.0010">
+        <ele>20.0</ele>
+      </trkpt>
+      <trkpt lat="0.0011" lon="0.0011">
+        <ele>21.0</ele>
+      </trkpt>
+      <trkpt lat="0.0012" lon="0.0012">
+        <ele>22.0</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

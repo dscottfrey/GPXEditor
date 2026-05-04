@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Fractional-time fixture</name>
+    <time>2026-01-01T00:00:00.000Z</time>
+  </metadata>
+  <trk>
+    <name>Track with sub-second timestamps</name>
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001">
+        <time>2026-01-01T00:00:00.000Z</time>
+      </trkpt>
+      <trkpt lat="0.0002" lon="0.0002">
+        <time>2026-01-01T00:00:00.500Z</time>
+      </trkpt>
+      <trkpt lat="0.0003" lon="0.0003">
+        <time>2026-01-01T00:00:01.250Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

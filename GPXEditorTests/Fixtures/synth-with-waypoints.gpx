@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Waypoints fixture</name>
+  </metadata>
+  <wpt lat="0.0001" lon="0.0001">
+    <ele>10.0</ele>
+    <name>Trailhead</name>
+    <sym>Trailhead</sym>
+    <desc>Synthetic start point</desc>
+  </wpt>
+  <wpt lat="0.0005" lon="0.0005">
+    <name>Summit</name>
+    <sym>Summit</sym>
+  </wpt>
+  <wpt lat="0.0010" lon="0.0010"/>
+  <trk>
+    <name>Track alongside waypoints</name>
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001">
+        <ele>10.0</ele>
+      </trkpt>
+      <trkpt lat="0.0005" lon="0.0005">
+        <ele>50.0</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

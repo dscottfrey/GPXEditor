@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="0.5" creator="GPXeditor synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/0/5">
+  <trk>
+    <name>Pretend GPX 0.5 (which never existed)</name>
+    <trkseg>
+      <trkpt lat="0.0001" lon="0.0001"/>
+    </trkseg>
+  </trk>
+</gpx>
