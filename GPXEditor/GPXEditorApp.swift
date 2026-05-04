@@ -18,9 +18,23 @@ struct GPXEditorApp: App {
     var body: some Scene {
         // WindowGroup is intentionally placeholder shell for M0 only.  M1
         // swaps this for a DocumentGroup and the project becomes
-        // document-based (one window per open .gpxeditor project).
+        // document-based (one window per open .gpxeditor project).  The
+        // .commands modifier below is Scene-attached, so it migrates to
+        // the DocumentGroup along with the rest of the scene wiring.
         WindowGroup {
             ContentView()
+        }
+        .commands {
+            // Replace SwiftUI's default "About GPXeditor" menu item with
+            // one that routes through AboutPanel.show() so the build
+            // identifier (timestamp + git SHA + dirty marker) appears in
+            // the standard About panel's Credits area.  See AboutPanel.swift
+            // and Scripts/generate_build_info.sh for why this matters.
+            CommandGroup(replacing: .appInfo) {
+                Button("About GPXeditor") {
+                    AboutPanel.show()
+                }
+            }
         }
     }
 }
