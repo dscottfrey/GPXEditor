@@ -287,6 +287,20 @@ The entry format is: a section heading with the decision number and a short noun
 
 ---
 
+## D-019: Self-signed certificate for local development signing
+
+**Status:** Accepted (2026-05-04)
+
+**Decision:** For local development signing during milestones M0 through M9, the project uses a **self-signed code-signing certificate** ("Lab Code Cert") held in the developer's login keychain in place of Xcode's Personal Team automatic-signing identity. The certificate is issued locally via Keychain Access's Certificate Assistant with a 10-year validity period, the `Digital Signature` key usage, and the `Code Signing` extended key usage. Both `GPXEditor` and `GPXEditorTests` targets are signed with the same certificate (Manual signing style, no Development Team). Hardened Runtime, App Sandbox, the entitlements file, and the broader notarization-readiness posture are unchanged. The transition to a Developer ID Application certificate at M10 remains a single Xcode build-setting change, identical in shape to the current switch.
+
+**Alternatives considered:** Continue using Xcode's free Personal Team automatic signing (the prior posture; discarded because Personal Team certificates expire after one year and are subject to silent revocation when Apple rotates issuing infrastructure — three revoked entries are presently visible in the developer's keychain, each one having silently broken builds at unpredictable moments); wait for the paid Developer ID Application certificate to become active and use it for development as well as distribution (delays the elimination of the expiry/revocation failure mode and conflates two categorically different signing roles); ad-hoc signing (`-` identity) (would lose Hardened Runtime + library validation enforcement, weakening the security-posture testing the development build is meant to support).
+
+**Rationale:** Personal Team certificates have a one-year validity and are subject to revocation events outside the developer's control. Each revocation silently breaks builds until the developer notices, then forces a re-provisioning roundtrip with Apple's infrastructure. A self-signed certificate with a 10-year validity eliminates that failure mode entirely; the certificate's only function during development is to satisfy macOS code-signing requirements (Hardened Runtime, sandbox enforcement) on the developer's own machine, none of which depend on Apple's signing infrastructure. The certificate is local-only — it has no relationship with Apple's servers, is never published, and is replaced by the Developer ID Application certificate at M10. The 10-year validity is a deliberate reach: by then the project will either have moved past needing it (Developer ID active since M10) or it can be regenerated trivially.
+
+**Consequences:** The `CODE_SIGN_STYLE` build setting changes from `Automatic` to `Manual` for both targets; `CODE_SIGN_IDENTITY` is set to `Lab Code Cert`; `DEVELOPMENT_TEAM` is cleared. Both targets must use the same certificate because Hardened Runtime's library validation requires consistent signing identity across the host app and any loaded test bundles. The certificate's private key is never committed (analogous to the Developer ID Application private key — same `.gitignore` rules cover both). M10's distribution-build work explicitly switches `CODE_SIGN_IDENTITY` back to `Developer ID Application: <name>` and re-enables Automatic signing if desired; that switch is a single build-setting edit and does not require any code, entitlement, or sandbox change. SECURITY.md is updated in the same commit as this decision to reflect that development builds may be signed with either a self-signed certificate or a Personal Team identity. The procedure is captured as a reusable best-practice doc at `Docs/self-signed-cert-for-development.md`.
+
+---
+
 ## End of accepted decisions
 
-Add new decisions below this line as D-019 onward. Maintain the same format and the append-only rule.
+Add new decisions below this line as D-020 onward. Maintain the same format and the append-only rule.
