@@ -6,7 +6,7 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M2 complete (2026-05-05).  Ready to begin M3.
+**Phase:** M3 complete (2026-05-05).  Ready to begin M4.
 
 M2 deliverables shipped and visually verified:  tile rendering works on every catalog basemap, the basemap selector switches cleanly between them, the WKContentRuleList enforces the allow-list, tracks render as polylines on top of tiles, Web Inspector is reachable in Debug builds.  `xcodebuild test` passes (58 tests, no regressions) and `xcodebuild build` produces a signed .app with the vendored web assets in `Contents/Resources/`:
 
@@ -26,7 +26,7 @@ Two project-wide infrastructure improvements landed alongside M1, each documente
 - **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
 - **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
 
-**Next action:** Begin **M3 — Selection and delete**.  Bridge messages to land:  Swift→JS `update_tracks` (so a Swift-originated edit shows up immediately, fixing the M2 limitation that imports require document close/reopen) and `highlight_selection`;  JS→Swift `points_selected` and `delete_points`.  The directive doc `Docs/02_MAP_AND_BRIDGE.md` already specifies the schemas;  M3 wires the handlers and the Point Tool's marquee + dedicated Lasso Tool gestures in `editor.js`, plus the Swift-side selection model and the `DeleteOperation` registered with NSUndoManager.
+**Next action:** Begin **M4 — Simplify brush** (the first concrete brush;  introduces the `BrushTool` protocol, `RegionBrushTool` specialization, gesture-during-drag preview, and the `apply_brush` / `render_brush_preview` / `clear_brush_preview` bridge messages — all already specified in `Docs/02_MAP_AND_BRIDGE.md`).
 
 **M2 deviations and follow-ups (none blocking M3):**
 - **WKContentRuleList `if-domain` vs `url-filter` gotcha** — the first cut of `ContentRuleListBuilder` used `if-domain` for allow rules, which filters by the **page's** domain (file://) rather than the **resource's** domain (https://tile.openstreetmap.org).  Result:  every tile fetch was silently blocked, tiles rendered grey.  Fixed mid-M2 by switching the allow rules to `url-filter` regex on the resource URL.  The lesson is documented in `ContentRuleListBuilder.swift`'s comments — content-blocker format's domain-filter fields are page-scoped, not resource-scoped.
@@ -79,11 +79,24 @@ Visually verified end-to-end:  tiles render on every basemap, basemap switching 
 - **Pre-existing Info.plist build-phase warning** carried forward from M0;  cosmetic, no behavior impact.
 - **No track-list UI surface until M8 — feels rougher than expected during use** (Scott's feedback during M2 verification, 2026-05-05).  Two compounding gaps:  (a) imports during a session don't render until close/reopen (M2 limitation above), and (b) once they do render, the auto-fit-to-all-tracks behavior zooms the viewport to cover whatever extreme-coordinate spread the project contains, making each individual track a barely-visible dot;  with no sidebar there's no surface to navigate to a specific track.  Workaround for now:  `⌘S` after each import to make sure the project file is saved, close the document, reopen — the fresh `load_session` includes every imported track.  Real fixes both come into the roadmap at named milestones — `update_tracks` at M3, sidebar with double-click-to-center at M8 — but the combination is unfriendly enough that pulling a minimal track-list-only sidebar forward (as a small M3 add-on) is worth weighing if M3-M7 work feels blocked by track navigation in practice.  Not a roadmap change yet;  flagging the option so the tradeoff is visible.
 
-### M3 — Selection and delete
+### M3 — Selection and delete — **Completed 2026-05-05**
 
-Implement the Point Tool's marquee selection (drag in empty space) and the dedicated Lasso Tool. Selection state lives in JavaScript during the gesture; on commit, JS posts a `points_selected` message with the affected track and point indices to Swift. Swift maintains the canonical selection state. Implement Delete operating on the current selection (a single operation in `Services/`, registered with `NSUndoManager`). Implement keyboard shortcuts: ⌘A select all, ⇧⌘A deselect all, Delete deletes selection, ⌘E selects entire segment, ⌘2 zooms to selection.
+Lands the Point Tool's marquee gesture (drag in empty space) and the dedicated Lasso Tool (free-form polygon).  Selection state during the gesture lives in JS;  on commit JS posts `points_selected` with `(track_id, segment_id, point_indices)` triples and a `replace`/`add`/`subtract` modifier (Photoshop-style: shift = add, alt/option = subtract).  Swift owns the canonical selection in `SessionViewModel.selection` (per-window, transient — not saved to disk).  `highlight_selection` round-trips back to JS so the visible highlight is what Swift says, not what the gesture left behind — Swift-as-source-of-truth.
 
-Verify: Open a noisy track, marquee a rest-stop cluster, hit Delete, ⌘Z restores it, lasso an irregularly-shaped cluster, Delete again. Click a segment in the sidebar (next milestone provides the sidebar; for now select-segment lives in the right-click menu) and confirm all its points highlight on the map.
+Delete operates on the canonical selection.  `Services/DeleteOperation.swift` is a pure (session, selection) → (session, touched) function;  `SessionViewModel.deleteSelected()` snapshots the prior session and selection, applies the operation, and registers an undo with NSUndoManager.  Empty segments and tracks are preserved (not pruned) so identity survives undo correctly.  Stale indices in a selection (e.g. after partial undo replays) are silently ignored rather than fatal.
+
+Tool switching:  V / L menu items with single-key keyboard shortcuts and Escape returning to Point Tool.  Tool changes round-trip through the bridge as a new `set_tool` outbound message (added to `Docs/02_MAP_AND_BRIDGE.md` at M3 — the original directive assumed JS would infer the tool from gesture context, which is brittle).
+
+M2 follow-up:  Swift→JS `update_tracks` is now wired so a Swift-originated edit (Import GPX, Delete, future operations) renders immediately.  The previous "imports don't show until close/reopen" limitation is closed.
+
+Tests:  19 new — `SelectionTests` (modifier merges, wire-format round-trip) and `DeleteOperationTests` (descending-index correctness, empty-segment preservation, stale-index tolerance, multi-track touched list).  Total now 77;  no regressions.
+
+**M3 outcome notes (deviations and follow-ups):**
+
+- **UUID-case round-trip bug caught during M3 verification.**  First cut had `WireSelectionGroup` carry `trackId: UUID` / `segmentId: UUID` directly through Codable.  Decode (JS lowercase → Swift UUID) was case-insensitive and worked, but encode (Swift UUID → JS) used `UUID.uuidString` which produces UPPERCASE.  JS's `state.tracksById` is keyed by lowercase strings (matching the Swift→JS load_session convention WireTrack established).  Result:  `points_selected` round-tripped to `highlight_selection` with uppercase track ids that didn't match any key in JS, so 0 markers rendered with `skipped_no_track > 0` while everything Swift-side reported success.  Fixed by switching `WireSelectionGroup.trackId` / `segmentId` to `String` with explicit `.lowercased()` at construction, matching the WireTrack/WireSegment/WireWaypoint pattern.  The WireSelectionGroup type doc captures the gotcha explicitly so the next person who adds a UUID-bearing wire type doesn't repeat it.
+- **Track halo doesn't scale with zoom (D-013 contrast rule polish item).**  `editor.css` declares `.track-halo` with `stroke-width: 6px` — fixed pixel value chosen at M2 to be visible against any basemap.  At high zoom the 6px halo is wider than typical map features and visually dominates the 3px colored line under it (Esri satellite imagery especially makes this look like a white blob).  Make the halo stroke-width zoom-aware (Leaflet's `map.on('zoomend')` can drive a CSS variable) or scale relative to the map's pixel-per-degree.  Polish, not blocking — the contrast goal of D-013 is met;  the visual could just be more refined.
+- **Selection markers stack at high zoom.**  With 1300+ points selected in a tight section, the 5px-radius CircleMarkers overlap each other into a dense row.  Same fix family as the halo:  scale marker radius with zoom, or render selection as a stroke overlay instead of per-point markers when the selection is dense.  Polish for M8 (the sidebar / inspector pass touches selection-rendering ergonomics anyway).
+- **No zoom-to-selection (⌘2) yet.**  M3's keyboard-shortcut list in the original spec named ⌘2 "zooms to selection" but the work landed without it.  Trivial to add (compute LatLngBounds over the selection's points, call `map.fitBounds`, send via a new `zoom_to_bounds` outbound message).  Adding to deferred parking lot rather than reopening M3.
 
 ### M4 — Simplify brush
 
@@ -199,6 +212,11 @@ Items discussed during planning, deliberately not built in v1, captured here so 
 - Swift formatter integration (CONVENTIONS.md notes "no formatter in v1"; add `swift-format` if style drift becomes a problem).
 - GitHub Actions CI for build verification on PRs.
 - Dependabot for security alerts on any added SPM dependencies.
+
+**Visual rendering:**
+- Zoom-aware track-halo stroke width (M3 deferred 2026-05-05).  `editor.css` `.track-halo` uses a fixed 6px stroke that visually dominates the 3px colored line at high zoom.  Make it scale via a Leaflet `zoomend` listener that updates a CSS custom property (or computes per-zoom values), or render the halo as a lower-opacity sibling polyline whose weight tracks zoom level.
+- Zoom-aware selection-marker radius / dense-selection alternate rendering (M3 deferred 2026-05-05).  CircleMarkers stack at high zoom when the selection is dense (1000+ points in a tight section);  consider switching to a stroke overlay along the selected polyline range when the marker count exceeds a threshold.
+- ⌘2 "Zoom to Selection" command (M3 deferred 2026-05-05).  Compute LatLngBounds over the selection, call `map.fitBounds`, drive via a new `zoom_to_bounds` Swift→JS bridge message.  Originally listed in M3's keyboard-shortcut spec but landed without it.
 
 ## Update protocol for this document
 

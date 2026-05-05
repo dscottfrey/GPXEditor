@@ -231,6 +231,18 @@ Visualize the canonical selection. Selection state lives in Swift; JS only rende
 
 An empty array clears the highlight.
 
+#### `set_tool` (M3)
+Notify JS that the active editing tool has changed. JS reads this to decide which gesture to attach to the next mouse drag — rectangle for `point` (marquee), free-form polygon for `lasso`. Added at M3 because the original directive's assumption that JS would infer the tool from gesture context was brittle (a user expects "the lasso tool draws a lasso every time"; gesture is the result, not the cause).
+
+```json
+{
+  "type": "set_tool",
+  "payload": {"tool": "point" | "lasso"}
+}
+```
+
+JS clears any in-progress marquee or lasso state on receipt — half-finished gestures under the new tool would be confusing.
+
 ### JS → Swift
 
 #### `ready` (M2)

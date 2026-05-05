@@ -37,6 +37,12 @@ struct MapView: NSViewRepresentable {
     /// and write back when the user picks a basemap from the selector.
     @Binding var document: GPXEditorDocument
 
+    /// Per-window editing-state holder.  M3 introduces this:  the
+    /// selection and active tool live here, observed by SwiftUI so
+    /// updates flow through updateNSView and into the bridge as
+    /// `highlight_selection` and `set_tool` messages.
+    @ObservedObject var sessionVM: SessionViewModel
+
     func makeCoordinator() -> Coordinator {
         Coordinator(documentBinding: $document)
     }
@@ -123,10 +129,12 @@ struct MapView: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
         // SwiftUI calls this whenever the surrounding state may have
-        // changed.  Our job is to detect document changes that need to
-        // be reflected in JS:  the active basemap and the tracks list.
-        // The coordinator owns the diff state.
-        context.coordinator.documentChanged(to: document)
+        // changed.  The coordinator owns the diff state — for each kind
+        // of state (basemap, tracks, selection, tool) it tracks the
+        // last-applied value and sends a bridge message only when the
+        // current value differs.  This keeps updateNSView idempotent
+        // even when SwiftUI re-runs it for unrelated reasons.
+        context.coordinator.documentChanged(to: document, sessionVM: sessionVM)
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
@@ -203,6 +211,27 @@ extension MapView {
         /// unrelated reasons.
         private var lastAppliedBasemapId: String?
 
+        /// Snapshot of tracks last sent to JS.  Used to detect what
+        /// changed between updateNSView calls so update_tracks only
+        /// includes tracks whose contents actually shifted.  The full
+        /// initial set is sent via load_session;  subsequent diffs go
+        /// through update_tracks.
+        private var lastSentTracks: [Track] = []
+
+        /// The selection last sent via `highlight_selection`.  A
+        /// selection equal to this is not re-broadcast.
+        private var lastSentSelection: Selection = Selection()
+
+        /// The tool last sent via `set_tool`.  Same gating rule.
+        private var lastSentTool: EditingTool?
+
+        /// Weak reference to the active SessionViewModel.  Held so the
+        /// dispatcher's onPointsSelected callback (registered once at
+        /// init time) can route the parsed payload into the
+        /// SessionViewModel's selection state regardless of which
+        /// updateNSView call is currently in flight.
+        private weak var sessionVM: SessionViewModel?
+
         /// Whether the JS side has reported `ready`.  Until then,
         /// outbound messages are buffered (coordinator holds a snapshot
         /// of the latest desired state and sends it once ready arrives).
@@ -212,40 +241,54 @@ extension MapView {
             self.documentBinding = documentBinding
             self.bridge = MapBridge()
             super.init()
-            // Wire up the `ready` callback now;  the bridge's
-            // dispatcher routes `ready` here.
+            // Wire up dispatcher callbacks once.  The bridge stays for
+            // the coordinator's lifetime;  callbacks reference self
+            // weakly so the dispatcher's retained closures don't form
+            // a cycle with the coordinator.
             self.bridge.dispatcher.onReady = { [weak self] _ in
                 self?.handleJSReady()
+            }
+            self.bridge.dispatcher.onPointsSelected = { [weak self] payload in
+                self?.handlePointsSelected(payload)
             }
         }
 
         /// Called by MapView.updateNSView when SwiftUI propagates a
-        /// document change.  We diff against last-applied state and send
-        /// only the messages whose subject changed.
-        func documentChanged(to newDocument: GPXEditorDocument) {
+        /// document or session-VM change.  We diff against last-applied
+        /// state and send only the messages whose subject changed.
+        func documentChanged(to newDocument: GPXEditorDocument, sessionVM: SessionViewModel) {
+            // Hold onto the sessionVM so dispatcher callbacks can find
+            // it.  Weak ref — ownership is the SwiftUI view tree.
+            self.sessionVM = sessionVM
+
             // If JS isn't ready yet, defer — handleJSReady will pick up
-            // the latest document state and send everything in one go.
+            // the latest state and send everything in one go.
             guard jsReady else { return }
 
             applyBasemapIfChanged(in: newDocument)
-
-            // M2 doesn't support Swift-originated track edits; M3 will
-            // wire up update_tracks here.  For now, a fresh load_session
-            // is sent only at JS-ready time, not on every track change.
-            // A user who imports a GPX track during M2 sees the new
-            // track only after closing and reopening the document.  This
-            // is documented in HANDOFF.md M2's milestone scope and gets
-            // fixed at M3 alongside the selection-and-delete work.
+            applyTracksIfChanged(in: newDocument)
+            applySelectionIfChanged(sessionVM.selection)
+            applyToolIfChanged(sessionVM.activeTool)
         }
 
         /// Called by the bridge's dispatcher when JS sends `ready`.
-        /// Sends the initial `set_basemap` and `load_session` so the
-        /// WebView paints the document state.
+        /// Sends the initial `set_basemap`, `load_session`, and `set_tool`
+        /// so the WebView paints the document state with the right tool
+        /// active.
         private func handleJSReady() {
             jsReady = true
             let document = documentBinding.wrappedValue
             applyBasemapIfChanged(in: document)
             sendLoadSession(document: document)
+            // After load_session, the lastSentTracks snapshot is the
+            // full list — subsequent updates flow through update_tracks.
+            lastSentTracks = document.session.tracks
+
+            // Sync tool + selection with whatever the session VM holds.
+            if let sessionVM = sessionVM {
+                applyToolIfChanged(sessionVM.activeTool)
+                applySelectionIfChanged(sessionVM.selection)
+            }
         }
 
         /// Send `set_basemap` if the document's `selectedBasemapId`
@@ -269,6 +312,100 @@ extension MapView {
         private func sendLoadSession(document: GPXEditorDocument) {
             let payload = LoadSessionPayload(session: document.session)
             bridge.send(.loadSession(payload))
+        }
+
+        /// Detect track-level changes since the last applied snapshot
+        /// and send `update_tracks` for the changed tracks only.  The
+        /// snapshot is updated atomically on each call so the next
+        /// diff is against the just-sent state.
+        ///
+        /// Removed-track handling:  M3 has no UI surface for removing
+        /// tracks (M8's sidebar adds that), so removal isn't expected
+        /// in practice.  When it does arrive we'll need a separate
+        /// `remove_tracks` outbound message;  for now `update_tracks`
+        /// only handles add and modify.  A removed track would simply
+        /// stop being broadcast, leaving its stale rendering in JS
+        /// until the next load_session.
+        private func applyTracksIfChanged(in document: GPXEditorDocument) {
+            let newTracks = document.session.tracks
+            let oldByID = Dictionary(uniqueKeysWithValues: lastSentTracks.map { ($0.id, $0) })
+
+            var changed: [Track] = []
+            for track in newTracks {
+                if oldByID[track.id] != track {
+                    changed.append(track)
+                }
+            }
+
+            if !changed.isEmpty {
+                bridge.send(.updateTracks(UpdateTracksPayload(tracks: changed)))
+            }
+            lastSentTracks = newTracks
+        }
+
+        /// Send `highlight_selection` if the canonical selection
+        /// differs from the last value broadcast.  Empty selection is
+        /// sent like any other — JS treats an empty array as "clear
+        /// the highlight."
+        private func applySelectionIfChanged(_ selection: Selection) {
+            if selection == lastSentSelection { return }
+            bridge.send(.highlightSelection(HighlightSelectionPayload(selection: selection)))
+            lastSentSelection = selection
+        }
+
+        /// Send `set_tool` if the active tool differs from the last
+        /// value broadcast.
+        private func applyToolIfChanged(_ tool: EditingTool) {
+            if tool == lastSentTool { return }
+            bridge.send(.setTool(SetToolPayload(tool: tool)))
+            lastSentTool = tool
+        }
+
+        // MARK: - Inbound message handling
+
+        /// Update the canonical selection in response to a JS-side
+        /// gesture.  The modifier dictates whether the new points
+        /// replace, add to, or subtract from the existing selection.
+        /// SwiftUI observes SessionViewModel.selection (via @Published)
+        /// so the change automatically triggers an updateNSView, where
+        /// `applySelectionIfChanged` round-trips a `highlight_selection`
+        /// back to JS — Swift-as-source-of-truth, JS only renders what
+        /// Swift says.
+        private func handlePointsSelected(_ payload: PointsSelectedPayload) {
+            guard let sessionVM = sessionVM else {
+                logger.warning("points_selected received but no SessionViewModel attached")
+                return
+            }
+
+            // Flatten the wire groups into individual point references.
+            // toModelGroup() returns nil for wire-malformed UUID strings;
+            // that's a bridge violation the dispatcher should have caught
+            // already, but defensive guard prevents a malformed group from
+            // crashing or contaminating the selection.
+            var refs: [Selection.PointReference] = []
+            var malformedGroups = 0
+            for wireGroup in payload.selection {
+                guard let group = wireGroup.toModelGroup() else {
+                    malformedGroups += 1
+                    continue
+                }
+                for index in group.pointIndices {
+                    refs.append(Selection.PointReference(
+                        trackId: group.trackId,
+                        segmentId: group.segmentId,
+                        pointIndex: index
+                    ))
+                }
+            }
+            if malformedGroups > 0 {
+                logger.error("handlePointsSelected: \(malformedGroups, privacy: .public) wire groups had malformed UUID strings")
+            }
+
+            switch payload.modifier {
+            case .replace: sessionVM.selection.replace(with: refs)
+            case .add: sessionVM.selection.add(refs)
+            case .subtract: sessionVM.selection.subtract(refs)
+            }
         }
 
         /// Called by MapView when `WKContentRuleListStore` compilation

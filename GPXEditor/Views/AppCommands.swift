@@ -44,15 +44,24 @@ extension FocusedValues {
 
 // MARK: - Commands
 
-/// File-menu commands for GPXeditor.  Currently provides the Import
-/// GPX... action; future tasks (M5+) extend this with Export GPX,
-/// Export KML, etc.
+/// File- and Edit-menu commands for GPXeditor.  M1 added File → Import
+/// GPX;  M3 adds the Edit menu's selection and delete commands plus
+/// the tool-switching keyboard shortcuts.  Later milestones (M5+)
+/// extend with Export GPX, Export KML, and the per-tool menu items.
 struct AppCommands: Commands {
 
     /// The active document binding, or nil when no document window is
     /// frontmost.  Used by Import GPX to determine which session
     /// receives the imported tracks.
     @FocusedBinding(\.document) private var document: GPXEditorDocument?
+
+    /// The active window's SessionViewModel, or nil when no document
+    /// window is frontmost.  Selection commands and tool switching
+    /// route through it.  @FocusedValue (rather than @FocusedObject)
+    /// gives us an optional value;  we observe the whole SessionViewModel
+    /// — its @Published `selection` is what enables/disables the Delete
+    /// item — by reaching through the optional.
+    @FocusedValue(\.sessionViewModel) private var sessionVM: SessionViewModel?
 
     var body: some Commands {
         // Place Import GPX in the File menu, after the standard
@@ -64,6 +73,74 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
             .disabled(document == nil)
+        }
+
+        // ─── Edit menu — selection commands ──────────────────────────
+        // SwiftUI's default Edit menu has Undo / Redo and Cut / Copy /
+        // Paste.  We replace the .pasteboard group's standard items
+        // with project-specific selection commands plus Delete.  The
+        // standard Cut / Copy / Paste get omitted at M3 because the
+        // app has no clipboard semantics for tracks yet.
+        CommandGroup(replacing: .pasteboard) {
+            Button("Select All") {
+                sessionVM?.selectAll()
+            }
+            .keyboardShortcut("a", modifiers: [.command])
+            .disabled(sessionVM == nil)
+
+            Button("Deselect All") {
+                sessionVM?.clearSelection()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(sessionVM == nil || sessionVM?.selection.isEmpty == true)
+
+            Button("Select Entire Segment") {
+                sessionVM?.extendSelectionToWholeSegments()
+            }
+            .keyboardShortcut("e", modifiers: [.command])
+            .disabled(sessionVM == nil || sessionVM?.selection.isEmpty == true)
+
+            Divider()
+
+            Button("Delete") {
+                sessionVM?.deleteSelected()
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            .disabled(sessionVM == nil || sessionVM?.selection.isEmpty == true)
+        }
+
+        // ─── Tool menu — tool switching ──────────────────────────────
+        // Single-key shortcuts per D-014.  No modifier — pressing V
+        // anywhere in a focused window switches to Point Tool.  Escape
+        // returns to Point Tool from any other tool.
+        //
+        // Adding a custom CommandMenu rather than slotting into an
+        // existing one because the editor's tool roster is project-
+        // specific.  Future milestones extend with Brush 1-4 and W
+        // for Waypoint Place.
+        CommandMenu("Tools") {
+            Button("Point Tool") {
+                sessionVM?.setTool(.point)
+            }
+            .keyboardShortcut("v", modifiers: [])
+            .disabled(sessionVM == nil)
+
+            Button("Lasso Tool") {
+                sessionVM?.setTool(.lasso)
+            }
+            .keyboardShortcut("l", modifiers: [])
+            .disabled(sessionVM == nil)
+
+            Divider()
+
+            Button("Return to Point Tool") {
+                sessionVM?.returnToPointTool()
+            }
+            // Escape is the canonical "back to default" key.  No
+            // modifier — pressing Escape with no other gesture in
+            // flight returns to Point Tool.
+            .keyboardShortcut(.escape, modifiers: [])
+            .disabled(sessionVM == nil || sessionVM?.activeTool == .point)
         }
     }
 

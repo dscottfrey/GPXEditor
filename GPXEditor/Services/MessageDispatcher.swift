@@ -43,6 +43,18 @@ public final class MessageDispatcher {
     /// dispatcher itself is invoked from MapBridge).
     public var onReady: ((ReadyPayload) -> Void)?
 
+    /// Called when JS sends `points_selected` (M3).  The coordinator
+    /// updates the canonical selection in SessionViewModel and emits a
+    /// `highlight_selection` back to JS.
+    public var onPointsSelected: ((PointsSelectedPayload) -> Void)?
+
+    /// Called when JS sends `delete_points` (M3).  Currently unused —
+    /// the Delete-key path goes through Swift menu commands and
+    /// SessionViewModel directly — but the dispatcher accepts the
+    /// message so a future right-click → Delete inside the WebView
+    /// can route here without further plumbing.
+    public var onDeletePoints: ((DeletePointsPayload) -> Void)?
+
     public init() {}
 
     /// Dispatch a parsed envelope.  Decodes the payload according to
@@ -62,12 +74,21 @@ public final class MessageDispatcher {
                 self?.handleJSLog(payload)
             }
 
+        case "points_selected":
+            decodeAndDispatch(raw, type: PointsSelectedPayload.self) { [weak self] payload in
+                self?.onPointsSelected?(payload)
+            }
+
+        case "delete_points":
+            decodeAndDispatch(raw, type: DeletePointsPayload.self) { [weak self] payload in
+                self?.onDeletePoints?(payload)
+            }
+
         // Future-milestone types.  Logging at warning level rather than
         // error makes a stray early message visible during development
         // (the dispatcher is reachable;  the operation just isn't wired
         // yet) without conflating with genuine bridge violations.
-        case "points_selected", "delete_points",
-             "move_point", "add_point_on_line",
+        case "move_point", "add_point_on_line",
              "place_waypoint", "apply_brush", "request_segment_stats":
             logger.warning("Inbound `\(raw.type, privacy: .public)` received but handler not yet implemented")
 

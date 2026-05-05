@@ -107,6 +107,87 @@ public enum JSONValue: Codable, Sendable {
     }
 }
 
+/// Payload for the `points_selected` inbound message.  Sent by JS when
+/// a marquee, lasso, or click gesture commits.  Modifier indicates how
+/// the new selection combines with the existing canonical selection
+/// (Swift owns the canonical state; JS only reports the gesture).
+public struct PointsSelectedPayload: Decodable {
+    public let modifier: SelectionModifier
+    public let selection: [WireSelectionGroup]
+}
+
+/// How a points_selected gesture combines with the existing selection.
+/// Plain click / drag is `replace`;  shift modifier is `add`;  option
+/// modifier is `subtract`.  Snake_case raw values match the wire shape
+/// directly.
+public enum SelectionModifier: String, Decodable, Sendable {
+    case replace
+    case add
+    case subtract
+}
+
+/// Payload for the `delete_points` inbound message.  This is the path
+/// used by JS-originated deletes (e.g. a future right-click → Delete);
+/// the Delete-key path goes through Swift menus (AppCommands) and
+/// SessionViewModel.deleteSelected, not through the bridge.
+public struct DeletePointsPayload: Decodable {
+    public let trackId: UUID
+    public let segmentId: UUID
+    public let pointIndices: [Int]
+}
+
+/// Wire representation of one (track, segment, point_indices) group,
+/// shared by `points_selected` (inbound) and `highlight_selection`
+/// (outbound).  Mirrors `Selection.SegmentGroup` from the model layer.
+///
+/// **UUID case is part of the contract.**  The JS side keys
+/// `state.tracksById` by lowercase UUID strings (set when load_session
+/// is rendered;  see WireTrack.init's `.lowercased()` call).  A wire
+/// type that encoded UUIDs through Swift's default Codable would emit
+/// UPPERCASE strings (UUID.uuidString is uppercase), and the round-trip
+/// from Swift→JS→Swift→JS would produce a mismatch in the JS Map lookup
+/// — selection markers fail to render with `skipped_no_track > 0` even
+/// though the Swift side is doing everything correctly.  The fix is the
+/// same one WireTrack/WireSegment/WireWaypoint use:  store the wire
+/// representation as `String`, lowercase explicitly at construction,
+/// and convert back to UUID at the model boundary on the way in.
+public struct WireSelectionGroup: Codable {
+    public let trackId: String       // lowercase UUID string on the wire
+    public let segmentId: String     // lowercase UUID string on the wire
+    public let pointIndices: [Int]
+
+    public init(trackId: String, segmentId: String, pointIndices: [Int]) {
+        self.trackId = trackId
+        self.segmentId = segmentId
+        self.pointIndices = pointIndices
+    }
+
+    /// Build from the model layer's `Selection.SegmentGroup`.  Used
+    /// when encoding `highlight_selection` from the canonical
+    /// SessionViewModel.selection.  Lowercases the UUID strings so JS
+    /// state.tracksById key-matching works (see type doc).
+    public init(from group: Selection.SegmentGroup) {
+        self.trackId = group.trackId.uuidString.lowercased()
+        self.segmentId = group.segmentId.uuidString.lowercased()
+        self.pointIndices = group.pointIndices
+    }
+
+    /// Convert to the model layer's `Selection.SegmentGroup`.  Returns
+    /// nil if the wire strings aren't valid UUIDs — that's a bridge
+    /// violation the caller should log and drop, not crash on.
+    public func toModelGroup() -> Selection.SegmentGroup? {
+        guard
+            let trackUUID = UUID(uuidString: trackId),
+            let segmentUUID = UUID(uuidString: segmentId)
+        else { return nil }
+        return Selection.SegmentGroup(
+            trackId: trackUUID,
+            segmentId: segmentUUID,
+            pointIndices: pointIndices
+        )
+    }
+}
+
 // MARK: - Outbound payloads (Swift → JS)
 
 /// Payload for the `load_session` outbound message.  Carries the full
@@ -253,5 +334,76 @@ public struct SetBasemapPayload: Encodable {
         case tileUrlTemplate = "tile_url_template"
         case attribution
         case maxZoom = "max_zoom"
+    }
+}
+
+/// Payload for the `update_tracks` outbound message.  Sent after a
+/// Swift-side mutation that should be reflected in the WebView without
+/// reloading the entire session.  At M3 the typical sender is
+/// SessionViewModel.deleteSelected (which broadcasts the touched
+/// tracks), and the AppCommands Import GPX path (which broadcasts the
+/// newly-added tracks plus any existing ones if the operation requires
+/// it).
+///
+/// Wire format is "replace these tracks entirely" rather than a
+/// per-segment or per-point diff.  Per Docs/02_MAP_AND_BRIDGE.md the
+/// simpler shape is fast enough at the realistic scale of GPXeditor
+/// projects (a few tracks, thousands of points) and avoids a whole
+/// class of consistency bugs that diff protocols are heir to.
+public struct UpdateTracksPayload: Encodable {
+    public let tracks: [WireTrack]
+
+    /// Build from the canonical session, including only the tracks
+    /// whose ids appear in `trackIds`.  Returns an empty payload if
+    /// none of the requested ids match — caller decides whether to
+    /// send anyway (broadcast-empty serves as a "tell JS to drop any
+    /// stale layers" signal).
+    public init(session: GPXSession, trackIds: Set<UUID>) {
+        self.tracks = session.tracks
+            .filter { trackIds.contains($0.id) }
+            .map(WireTrack.init(from:))
+    }
+
+    /// Build from a list of tracks directly — used when the caller
+    /// already has the post-mutation Track values and wants to broadcast
+    /// them without re-walking the session.
+    public init(tracks: [Track]) {
+        self.tracks = tracks.map(WireTrack.init(from:))
+    }
+}
+
+/// Payload for the `highlight_selection` outbound message.  Sent any
+/// time the canonical selection changes.  Empty `selection` array
+/// clears the highlight.
+public struct HighlightSelectionPayload: Encodable {
+    public let selection: [WireSelectionGroup]
+
+    public init(selection: Selection) {
+        self.selection = selection.grouped().map(WireSelectionGroup.init(from:))
+    }
+}
+
+/// Payload for the `set_tool` outbound message.  Sent when the active
+/// editing tool changes (V → point, L → lasso, Escape → point).  JS
+/// reads this to decide which gesture to attach to the next mouse drag —
+/// rectangle for `point` (marquee), free-form polygon for `lasso`.
+///
+/// This message is an addition to the M2-M9 catalog originally drafted
+/// in Docs/02_MAP_AND_BRIDGE.md;  added at M3 because the directive's
+/// original assumption was that JS would infer the tool from the
+/// gesture, which is brittle (a user expects "the lasso tool draws a
+/// lasso every time" — the gesture cue is the result, not the cause).
+public struct SetToolPayload: Encodable {
+
+    /// Wire string identifying the tool.  Snake_case to match the
+    /// project's wire-format convention even though most tool names
+    /// are single words.
+    public let tool: String
+
+    public init(tool: EditingTool) {
+        switch tool {
+        case .point: self.tool = "point"
+        case .lasso: self.tool = "lasso"
+        }
     }
 }

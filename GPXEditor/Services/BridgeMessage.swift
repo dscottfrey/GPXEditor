@@ -123,9 +123,10 @@ public enum OutboundMessage {
 
     case loadSession(LoadSessionPayload)
     case setBasemap(SetBasemapPayload)
+    case updateTracks(UpdateTracksPayload)              // M3
+    case highlightSelection(HighlightSelectionPayload)  // M3
+    case setTool(SetToolPayload)                        // M3 — tool switch from menu
     // Future-milestone cases (declared here as they come online):
-    // case updateTracks(UpdateTracksPayload)              // M3
-    // case highlightSelection(HighlightSelectionPayload)  // M3
     // case renderBrushPreview(RenderBrushPreviewPayload)  // M4
     // case clearBrushPreview                              // M4
 
@@ -135,6 +136,9 @@ public enum OutboundMessage {
         switch self {
         case .loadSession: return "load_session"
         case .setBasemap: return "set_basemap"
+        case .updateTracks: return "update_tracks"
+        case .highlightSelection: return "highlight_selection"
+        case .setTool: return "set_tool"
         }
     }
 
@@ -157,6 +161,9 @@ public enum OutboundMessage {
         switch self {
         case .loadSession(let p): payloadData = try encoder.encode(p)
         case .setBasemap(let p): payloadData = try encoder.encode(p)
+        case .updateTracks(let p): payloadData = try encoder.encode(p)
+        case .highlightSelection(let p): payloadData = try encoder.encode(p)
+        case .setTool(let p): payloadData = try encoder.encode(p)
         }
 
         // Round-trip the payload through JSONSerialization so we can
