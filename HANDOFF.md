@@ -6,7 +6,7 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M4 complete (2026-05-05).  Ready to begin M5.
+**Phase:** M5 baseline (drag-to-move + click-on-line) lands 2026-05-05.  Right-click context menu and Edit-Coordinates dialog deferred to a follow-up pass.
 
 M2 deliverables shipped and visually verified:  tile rendering works on every catalog basemap, the basemap selector switches cleanly between them, the WKContentRuleList enforces the allow-list, tracks render as polylines on top of tiles, Web Inspector is reachable in Debug builds.  `xcodebuild test` passes (58 tests, no regressions) and `xcodebuild build` produces a signed .app with the vendored web assets in `Contents/Resources/`:
 
@@ -26,7 +26,7 @@ Two project-wide infrastructure improvements landed alongside M1, each documente
 - **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
 - **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
 
-**Next action:** Begin **M5 — Point Tool single-point operations** (vertex draggability, click-on-line to insert, right-click context menu).  This is the milestone where the Adze tedium gets concretely fixed (D-014):  every single-point edit available without leaving the Point Tool.
+**Next action:** Visual verification of the M5 baseline.  In Point Tool (`V`):  hover over a polyline vertex (within ~10 px) and drag — the polyline updates live as you drag, releases commit via `move_point` and Swift broadcasts `update_tracks`.  Click on a polyline (not on a vertex) to insert a new point at the click location;  the new point's elevation and timestamp are linearly interpolated from the surrounding anchors.  ⌘Z restores in either case.  After verification, the M5 follow-up (right-click context menu on points + empty space, Edit Coordinates dialog) can land as its own pass.
 
 **M2 deviations and follow-ups (none blocking M3):**
 - **WKContentRuleList `if-domain` vs `url-filter` gotcha** — the first cut of `ContentRuleListBuilder` used `if-domain` for allow rules, which filters by the **page's** domain (file://) rather than the **resource's** domain (https://tile.openstreetmap.org).  Result:  every tile fetch was silently blocked, tiles rendered grey.  Fixed mid-M2 by switching the allow rules to `url-filter` regex on the resource URL.  The lesson is documented in `ContentRuleListBuilder.swift`'s comments — content-blocker format's domain-filter fields are page-scoped, not resource-scoped.
@@ -126,13 +126,35 @@ Tests:  17 new — `RDPSimplifierTests` (endpoints always preserved, tolerance b
 
 Tests:  24 new (17 RDP + Simplify, 7 Smooth).  Total now 101;  no regressions.
 
-### M5 — Point Tool single-point operations
+### M5 — Point Tool single-point operations — **Baseline implementation 2026-05-05;  follow-up pending**
 
-Implement the full Point Tool behavior set: vertex draggability (drag a point to move it), click-on-line to insert a new point at the click location, right-click context menu on a point (Delete, Edit Coordinates, Snap to Ground, Promote to Waypoint, Set as Segment Boundary, Select Entire Segment), right-click context menu in empty space (Place Waypoint Here, Properties of This Location). Implement the bridge messages and Swift-side operations for each. NSUndoManager registers each operation with a meaningful action name.
+Lands the headline "Adze tedium fix" features:  vertex draggability and click-on-line insertion.  Right-click context menu and Edit Coordinates dialog deferred to a follow-up pass — the user-feedback loop benefits from getting drag-and-insert into the user's hands as the next iteration cue, and the context-menu items split cleanly into "wired now" (Delete already exists at M3, Promote to Waypoint, Set as Segment Boundary), "needs M7" (Snap to Ground → ElevationService), and "needs Edit Coordinates UI" (a small SwiftUI sheet, separate piece of work).
 
-This is the milestone where the Adze tedium is concretely fixed — single-point operations all work without leaving the Point Tool.
+Pieces shipped:
 
-Verify: Drag a point to a new location, save, reopen, point is in the new location. Click on a line between two points to add a new point, drag it where you want. Right-click a point and use each context-menu item.
+- `Services/MovePointOperation.swift` — pure function:  resolve (track, segment, index), update lat/lon, preserve elevation and timestamp.  Same-coordinates input is a no-op (no spurious undo entry).
+- `Services/AddPointOnLineOperation.swift` — pure function:  insert a new TrackPoint at `afterIndex + 1`.  Elevation and timestamp are linearly interpolated from surrounding anchors when both have those values;  fall back to the single available anchor;  nil otherwise (the "don't fabricate data" rule from CONVENTIONS.md applied at the model layer).  Edge cases:  `afterIndex == -1` inserts at front;  `afterIndex == count - 1` inserts at end.
+- `Services/BridgePayloads.swift` — `MovePointPayload`, `AddPointOnLinePayload` (inbound).  Schemas match the M2 catalog draft in `Docs/02`.
+- `Services/MessageDispatcher.swift` — adds `move_point` and `add_point_on_line` cases routing through new `onMovePoint` / `onAddPointOnLine` callbacks.
+- `Views/MapView.swift` — wires both callbacks to SessionViewModel methods.
+- `ViewModels/SessionViewModel.swift` — `applyMovePoint` and `applyAddPointOnLine` snapshot prior session, apply via the corresponding operation, register undo with action names "Move Point" / "Add Point."  Move preserves selection (indices unchanged);  Insert clears selection (indices > afterIndex shifted, simplest valid response).
+- `WebResources/editor.js`:
+  - **Vertex hit-test** at mousedown — within VERTEX_GRAB_TOLERANCE_PX (10) of any rendered vertex starts a vertex drag rather than a marquee.  During the drag the polyline's lat/lng array is updated in place so the user sees the new shape live.  Commit on mouseup posts `move_point`;  Swift broadcasts `update_tracks` and the polyline re-renders authoritatively.
+  - **Polyline click handler** bound per segment at render time.  Gates on Point Tool + no in-flight drag + click is on a non-vertex part of the polyline.  Computes the nearest sub-segment via clamped projection and posts `add_point_on_line` with the projected lat/lng.
+  - Document-level mouseup safety net extended to handle the new vertex-drag case alongside the existing marquee/lasso/brush handlers.
+  - Tool-switch teardown also clears any in-flight vertex drag.
+
+Tests:  16 new — `MovePointOperationTests` (basic move, metadata preservation, no-op cases) and `AddPointOnLineOperationTests` (insert, interpolation, fallback rules, edge-of-segment positions).  Total now 117;  no regressions.
+
+**Pending — M5 follow-up:**  right-click context menus on points (Delete, Edit Coordinates, Promote to Waypoint, Set as Segment Boundary, Select Entire Segment;  defer Snap to Ground to M7) and on empty space (Place Waypoint Here;  defer Properties of This Location to M7).  Edit Coordinates needs a small SwiftUI sheet.  Promote to Waypoint and Set as Segment Boundary are pure-function operations on the same shape as MovePoint / AddPointOnLine.
+
+**Visual-feedback observations surfaced during M5 baseline verification (Scott, 2026-05-05).**  Two related but separately-addressed pieces:
+
+- **Always-visible points.**  Track vertices currently have no per-point visualization unless selected — Scott observed "I can select invisible points," meaning the marquee catches things the user can't see.  Proposed fix:  every track point renders as a small marker (default grey or black, system-blue or accent when selected).  Selection becomes a visible state CHANGE on already-visible markers, not a marker-from-nothing.  Performance caveat:  thousands of CircleMarkers can overwhelm Leaflet at low zoom — implementation needs zoom-gating or a canvas-renderer fallback.
+
+- **Selection ghosts as a feature, with fade-out.**  Currently, after a vertex drag (`move_point`), the polyline updates via `update_tracks` but the selection-highlight markers stay at the OLD positions because Swift doesn't re-emit `highlight_selection` on Move (selection indices are still valid, just at moved positions).  Scott's preference (verbatim):  "I actually like the points getting left behind, but they should fade out over, so 30 seconds."  Implementation sketch:  on `update_tracks`, take the current `state.selectionLayer`, detach it from "active" status, start a 30s opacity fade animation, then remove.  Fresh `highlight_selection` messages produce a new active layer.  Multiple ghosts can coexist if the user does several edits in quick succession.  Open question:  does the ghost represent the still-selected-in-Swift points (so the user might still hit Delete and remove them) or is it purely a visual trail?  Probably the latter for cleanliness — Move could trigger a Swift-side selection re-broadcast at the new positions while the OLD positions fade as visual history.  Settle when the feature is built.
+
+Both captured in the "Visual rendering" deferred parking lot for a dedicated pass.
 
 ### M6 — Track operations: split, merge, reverse, time-trim
 
@@ -178,7 +200,7 @@ Things still pending from the user, in roughly priority order:
 
 **4. M2 verification: CyclOSM mirror selection.** **Resolved 2026-05-05 — single OSM-France mirror selected.** Published URL template is `https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png` with the standard Leaflet `{s}` rotation across `a` / `b` / `c`. Hosted by OSM-France, governed by the OpenStreetMap Foundation tile usage policy. Attribution string baked into `BasemapCatalog`: `© OpenStreetMap contributors, CyclOSM & OSM-FR`. The OSM-France subdomain rotation provides load distribution, so a second independently-hosted mirror was considered (Champs-Libres' Belgium DEM-quality server) and rejected as regional-scope and unnecessary for a generally-useful basemap. The research surfaced a project-wide `User-Agent` requirement now documented in SECURITY.md.
 
-**5. App icon design.** Placeholder is fine through M9. Before M10 ships a public release, a real app icon is needed. The icon doesn't need to be elaborate — a simple stylized track-on-map glyph in colorblind-safe colors (matching the project's accessibility principle in CONVENTIONS.md) is sufficient. Update this entry with the icon source files and the date they were imported.
+**5. App icon design.** **Resolved 2026-05-05 (development placeholder satisfied).** A 1024×1024 master (topographic map background with a diagonal pencil/stylus overlay) is committed at the repo root as `icon-source.png`;  Xcode's `AppIcon.appiconset` is generated from it via `sips` (downsample) + `optipng` (recompress).  Total icon set ~2.3 MB, committed in `718e54e`.  Re-evaluate before the M10 public flip:  a vector master (SVG) would let us regenerate at arbitrary sizes and tune the post-Big-Sur squircle masking conventions Apple introduced;  the current PNG master is fine for development but isn't ideal for a public-release artifact.  Iteration items:  (a) consider whether the icon's edge-to-edge full-bleed terrain fits the macOS Big-Sur+ icon shape (a centered scene with a clear focal point usually masks better than a textured field), (b) evaluate alternate basemaps / focal compositions if Scott wants something more distinctive than "map + pencil."
 
 ## Pre-public-release checklist
 
@@ -202,6 +224,7 @@ Per D-005, the repository stays private until *all* of the following are checked
 Items discussed during planning, deliberately not built in v1, captured here so they're not lost or accidentally re-implemented. Pull from this list when real use surfaces a need; promote to a `D-XXX` decision in DECISIONS.md and a milestone here when accepted.
 
 **Editing features:**
+- M5 follow-up:  right-click context menus (on points and on empty space) and Edit Coordinates dialog.  See M5 milestone notes for the breakdown by item.
 - Speed-based trim (start-while-below / end-while-above thresholds; D-018 deferred speed component).
 - Brush radius slider with `[` / `]` keyboard adjustment (D-016 iteration path).
 - Brush hardness slider (D-016 iteration path).  Concretely requested during M4 verification (2026-05-05):  Smooth Brush at kernel half-width 1 felt "too subtle but multiple passes works"; bumping back to 3 felt "much too aggressive."  A user-controlled strength dial (per-stroke or persistent) lets the user pick the right level for the track at hand.  Same applies to Simplify Brush's RDP tolerance.  Implementation:  one Slider per brush in a brushes panel (M8-ish);  alternative — modifier-key-held aggressiveness (Shift = stronger, Option = weaker).
@@ -239,6 +262,8 @@ Items discussed during planning, deliberately not built in v1, captured here so 
 - Zoom-aware track-halo stroke width (M3 deferred 2026-05-05).  `editor.css` `.track-halo` uses a fixed 6px stroke that visually dominates the 3px colored line at high zoom.  Make it scale via a Leaflet `zoomend` listener that updates a CSS custom property (or computes per-zoom values), or render the halo as a lower-opacity sibling polyline whose weight tracks zoom level.
 - Zoom-aware selection-marker radius / dense-selection alternate rendering (M3 deferred 2026-05-05).  CircleMarkers stack at high zoom when the selection is dense (1000+ points in a tight section);  consider switching to a stroke overlay along the selected polyline range when the marker count exceeds a threshold.
 - ⌘2 "Zoom to Selection" command (M3 deferred 2026-05-05).  Compute LatLngBounds over the selection, call `map.fitBounds`, drive via a new `zoom_to_bounds` Swift→JS bridge message.  Originally listed in M3's keyboard-shortcut spec but landed without it.
+- **Always-visible track points** (M5 deferred 2026-05-05).  Render every track vertex as a small grey/black CircleMarker by default, system-blue / accent when selected.  Resolves the "I can select invisible points" surprise and unifies the selection-marker / unselected-vertex visual language.  Implementation:  zoom-gated rendering or canvas renderer for the multi-thousand-points case.  See M5 outcome notes for full context.
+- **Selection-ghost fade-out** (M5 deferred 2026-05-05).  Scott's preferred behaviour for the post-drag stale-marker case:  leave the old-position selection markers in place after a Move, fade them out smoothly over ~30 seconds.  Multiple ghosts can stack if the user makes several edits quickly.  Open design question (settle at implementation time):  does the ghost represent still-selected-in-Swift points or is it purely a visual trail with Swift's selection state re-syncing to the new positions immediately?  See M5 outcome notes for full context.
 
 ## Update protocol for this document
 

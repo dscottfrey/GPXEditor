@@ -254,6 +254,12 @@ extension MapView {
             self.bridge.dispatcher.onApplyBrush = { [weak self] payload in
                 self?.handleApplyBrush(payload)
             }
+            self.bridge.dispatcher.onMovePoint = { [weak self] payload in
+                self?.handleMovePoint(payload)
+            }
+            self.bridge.dispatcher.onAddPointOnLine = { [weak self] payload in
+                self?.handleAddPointOnLine(payload)
+            }
         }
 
         /// Called by MapView.updateNSView when SwiftUI propagates a
@@ -446,6 +452,36 @@ extension MapView {
             default:
                 logger.error("apply_brush unknown brush_type: \(payload.brushType, privacy: .public)")
             }
+        }
+
+        /// Apply a vertex-drag commit from JS (M5).
+        private func handleMovePoint(_ payload: MovePointPayload) {
+            guard let sessionVM = sessionVM else {
+                logger.warning("move_point received but no SessionViewModel attached")
+                return
+            }
+            sessionVM.applyMovePoint(
+                trackId: payload.trackId,
+                segmentId: payload.segmentId,
+                pointIndex: payload.pointIndex,
+                latitude: payload.lat,
+                longitude: payload.lon
+            )
+        }
+
+        /// Apply a click-on-line insertion from JS (M5).
+        private func handleAddPointOnLine(_ payload: AddPointOnLinePayload) {
+            guard let sessionVM = sessionVM else {
+                logger.warning("add_point_on_line received but no SessionViewModel attached")
+                return
+            }
+            sessionVM.applyAddPointOnLine(
+                trackId: payload.trackId,
+                segmentId: payload.segmentId,
+                afterIndex: payload.afterIndex,
+                latitude: payload.lat,
+                longitude: payload.lon
+            )
         }
 
         /// Called by MapView when `WKContentRuleListStore` compilation

@@ -136,6 +136,33 @@ public struct DeletePointsPayload: Decodable {
     public let pointIndices: [Int]
 }
 
+/// Payload for the `move_point` inbound message (M5).  Sent by JS on
+/// vertex-drag commit (mouseup) with the destination lat/lon.  The
+/// (track_id, segment_id, point_index) triple identifies the point
+/// being moved;  Swift looks it up, updates lat/lon (preserving
+/// elevation and timestamp), and broadcasts update_tracks.
+public struct MovePointPayload: Decodable {
+    public let trackId: UUID
+    public let segmentId: UUID
+    public let pointIndex: Int
+    public let lat: Double
+    public let lon: Double
+}
+
+/// Payload for the `add_point_on_line` inbound message (M5).  Sent
+/// by JS on a click landing on a polyline (not on a vertex).
+/// `afterIndex` names the existing point that the new point should
+/// be inserted IMMEDIATELY AFTER;  -1 means insert at the very front.
+/// Per Docs/02_MAP_AND_BRIDGE.md, the wire field is `after_index`
+/// which decodes to `afterIndex` via the snake-case strategy.
+public struct AddPointOnLinePayload: Decodable {
+    public let trackId: UUID
+    public let segmentId: UUID
+    public let afterIndex: Int
+    public let lat: Double
+    public let lon: Double
+}
+
 /// Payload for the `apply_brush` inbound message (M4).  Sent by JS on
 /// brush-stroke commit (mouseup).  Per Docs/02_MAP_AND_BRIDGE.md the
 /// stroke geometry — not the JS-computed preview result — is what

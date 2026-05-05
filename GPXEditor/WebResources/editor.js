@@ -44,7 +44,14 @@
     // Sent to Swift with the `ready` message so a Swift/JS schema mismatch
     // is visible in os_log alongside the version of the running native
     // binary.  Bumped manually when this file's bridge contract changes.
-    const EDITOR_VERSION = 'editor.js@2026-05-05-m4';
+    const EDITOR_VERSION = 'editor.js@2026-05-05-m5';
+
+    // ─── Point-tool gesture parameters (M5) ──────────────────────────────
+    // Vertex grab tolerance in CSS pixels — how close the cursor must be
+    // to a polyline vertex on mousedown to start a vertex drag rather
+    // than a marquee selection.  Standard GIS-editor convention is
+    // 8-12 px;  10 felt right for a v1 default and is tunable later.
+    const VERTEX_GRAB_TOLERANCE_PX = 10;
 
     // ─── Brush parameters (M4) ───────────────────────────────────────────
     // Fixed for v1 per D-016 — no slider, no per-stroke tuning.  Tunable
@@ -74,6 +81,8 @@
         lasso: null,               // active lasso state, see startLasso
         brush: null,               // active brush state, see startBrush
                                    //   { type: 'simplify'|'smooth', samples, ... }
+        vertexDrag: null,          // active vertex-drag state, see startVertexDrag
+                                   //   { trackId, segmentId, pointIndex, originalLatLngs, marker }
     };
 
     // ─── Bridge — outbound (JS -> Swift) ─────────────────────────────────
@@ -242,6 +251,18 @@
                 interactive: true,
             }).addTo(state.map);
 
+            // M5 click-on-line insert:  bind a click handler per
+            // polyline so the track_id / segment_id are captured in the
+            // closure.  handlePolylineClick gates by current tool and
+            // drag-in-progress state.  Listening on `click` (not
+            // mousedown) lets Leaflet distinguish "clicked the polyline"
+            // from "just dragged through it on the way to a marquee."
+            const trackIdForClosure = track.track_id;
+            const segmentIdForClosure = segment.segment_id;
+            line.on('click', function (e) {
+                handlePolylineClick(trackIdForClosure, segmentIdForClosure, e);
+            });
+
             segmentLayers.set(segment.segment_id, { halo: halo, line: line });
         }
         state.tracksById.set(track.track_id, {
@@ -352,11 +373,11 @@
             return;
         }
         // Cancel any in-progress gesture before switching tools — half-
-        // finished marquees / lassos / brushes under the new tool would
-        // be confusing.
+        // finished gestures under the new tool would be confusing.
         clearMarquee();
         clearLasso();
         clearBrush();
+        clearVertexDrag();
         state.currentTool = payload.tool;
         log('info', 'Tool set', { tool: payload.tool });
     }
@@ -804,6 +825,193 @@
         return ranges;
     }
 
+    // ─── Point Tool — vertex draggability (M5) ───────────────────────────
+    // On mousedown in Point Tool we hit-test against every rendered
+    // polyline vertex.  If the cursor is within VERTEX_GRAB_TOLERANCE_PX
+    // of a vertex, we start a vertex drag instead of a marquee.  During
+    // the drag we update the polyline's lat/lng array in place so the
+    // user sees the new shape live;  on commit we send move_point.
+    // Swift's update_tracks broadcast then re-renders authoritatively.
+
+    function vertexHitTest(latlng) {
+        const cursorPx = state.map.latLngToContainerPoint(latlng);
+        let bestDist = VERTEX_GRAB_TOLERANCE_PX;
+        let best = null;
+        for (const [trackId, trackEntry] of state.tracksById) {
+            for (const [segmentId, segmentLayers] of trackEntry.segmentLayers) {
+                const latlngs = segmentLayers.line.getLatLngs();
+                for (let i = 0; i < latlngs.length; i++) {
+                    const vpx = state.map.latLngToContainerPoint(latlngs[i]);
+                    const d = cursorPx.distanceTo(vpx);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = {
+                            trackId: trackId,
+                            segmentId: segmentId,
+                            pointIndex: i,
+                            segmentLayers: segmentLayers,
+                        };
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    function startVertexDrag(hit, latlng) {
+        const segmentLayers = hit.segmentLayers;
+        const originalLatLngs = segmentLayers.line.getLatLngs().map(ll => L.latLng(ll.lat, ll.lng));
+
+        state.vertexDrag = {
+            trackId: hit.trackId,
+            segmentId: hit.segmentId,
+            pointIndex: hit.pointIndex,
+            segmentLayers: segmentLayers,
+            originalLatLngs: originalLatLngs,
+            // A small visible marker at the cursor while the user drags
+            // (the polyline updates live too, but a marker reinforces
+            // "this is the point you're moving").
+            marker: L.circleMarker(latlng, {
+                radius: 6,
+                color: '#ffffff',
+                weight: 2,
+                fillColor: '#3b82f6',
+                fillOpacity: 1.0,
+                interactive: false,
+            }).addTo(state.map),
+        };
+        state.map.dragging.disable();
+        // Reflect the initial cursor position into the polyline so
+        // there's no visual snap on first mousemove.
+        applyVertexDragPosition(latlng);
+    }
+
+    function updateVertexDrag(e) {
+        if (!state.vertexDrag) return;
+        state.vertexDrag.marker.setLatLng(e.latlng);
+        applyVertexDragPosition(e.latlng);
+    }
+
+    function applyVertexDragPosition(latlng) {
+        const drag = state.vertexDrag;
+        const newLatLngs = drag.originalLatLngs.slice();
+        newLatLngs[drag.pointIndex] = latlng;
+        drag.segmentLayers.line.setLatLngs(newLatLngs);
+        drag.segmentLayers.halo.setLatLngs(newLatLngs);
+    }
+
+    function commitVertexDrag(e) {
+        if (!state.vertexDrag) return;
+        const drag = state.vertexDrag;
+        const finalLatLng = e ? e.latlng : drag.marker.getLatLng();
+        clearVertexDrag();
+
+        postToSwift({
+            type: 'move_point',
+            payload: {
+                track_id: drag.trackId,
+                segment_id: drag.segmentId,
+                point_index: drag.pointIndex,
+                lat: finalLatLng.lat,
+                lon: finalLatLng.lng,
+            },
+        });
+    }
+
+    function clearVertexDrag() {
+        if (state.vertexDrag) {
+            // Restore the polyline to its original state — Swift's
+            // update_tracks will re-render with the canonical result
+            // moments later, so this avoids a transient visual that
+            // doesn't match the final state if Swift drops the move.
+            state.vertexDrag.segmentLayers.line.setLatLngs(state.vertexDrag.originalLatLngs);
+            state.vertexDrag.segmentLayers.halo.setLatLngs(state.vertexDrag.originalLatLngs);
+            state.vertexDrag.marker.remove();
+            state.vertexDrag = null;
+        }
+        state.map.dragging.enable();
+    }
+
+    // ─── Point Tool — click-on-line to insert (M5) ───────────────────────
+    // Wired per polyline at render time (renderTrack attaches a `click`
+    // handler).  When a polyline is clicked AND no drag was in progress,
+    // we figure out which sub-segment (i, i+1) the click landed on and
+    // post add_point_on_line with the projected lat/lng.
+
+    function handlePolylineClick(trackId, segmentId, e) {
+        // Only the Point Tool inserts on click;  brush / lasso / etc.
+        // ignore polyline clicks.
+        if (state.currentTool !== 'point') return;
+        // If a vertex drag is in progress, the mouseup that ended the
+        // drag may also have triggered this click — ignore.
+        if (state.vertexDrag) return;
+        // If the click landed on a vertex within tolerance, we already
+        // started a vertex drag (or considered to);  in either case
+        // this isn't a click-on-line insert.
+        if (vertexHitTest(e.latlng)) return;
+
+        const trackEntry = state.tracksById.get(trackId);
+        if (!trackEntry) return;
+        const segmentLayers = trackEntry.segmentLayers.get(segmentId);
+        if (!segmentLayers) return;
+
+        const latlngs = segmentLayers.line.getLatLngs();
+        if (latlngs.length < 2) return;
+
+        const hit = nearestSubSegment(e.latlng, latlngs);
+        if (!hit) return;
+
+        postToSwift({
+            type: 'add_point_on_line',
+            payload: {
+                track_id: trackId,
+                segment_id: segmentId,
+                after_index: hit.afterIndex,
+                lat: hit.projectedLatLng.lat,
+                lon: hit.projectedLatLng.lng,
+            },
+        });
+    }
+
+    /// Find which (i, i+1) sub-segment of a polyline the click landed
+    /// on, plus the projection of the click onto that sub-segment.
+    /// Returns null if the polyline has fewer than two points.
+    function nearestSubSegment(clickLatLng, latlngs) {
+        if (latlngs.length < 2) return null;
+        let bestAfter = -1;
+        let bestDist = Infinity;
+        let bestProjection = null;
+        for (let i = 0; i < latlngs.length - 1; i++) {
+            const projected = projectOnSegment(clickLatLng, latlngs[i], latlngs[i + 1]);
+            const dist = clickLatLng.distanceTo(projected);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestAfter = i;
+                bestProjection = projected;
+            }
+        }
+        return bestAfter >= 0
+            ? { afterIndex: bestAfter, projectedLatLng: bestProjection }
+            : null;
+    }
+
+    /// Project a point onto a line segment, clamped to the segment's
+    /// endpoints.  Operates in (lng, lat) Euclidean space — fine for
+    /// hiking-track scale where small-area curvature error is well
+    /// below click precision.
+    function projectOnSegment(p, a, b) {
+        const ax = a.lng, ay = a.lat;
+        const bx = b.lng, by = b.lat;
+        const px = p.lng, py = p.lat;
+        const abx = bx - ax;
+        const aby = by - ay;
+        const denom = abx * abx + aby * aby;
+        if (denom === 0) return L.latLng(ay, ax);
+        let t = ((px - ax) * abx + (py - ay) * aby) / denom;
+        t = Math.max(0, Math.min(1, t));
+        return L.latLng(ay + t * aby, ax + t * abx);
+    }
+
     function getModifierKey(originalEvent) {
         // Shift = add to existing selection.
         // Alt/Option = subtract from existing selection.
@@ -900,7 +1108,15 @@
             // and the preview rendering differ, both of which are
             // already keyed off state.brush.type.
             if (state.currentTool === 'point') {
-                startMarquee(e);
+                // Vertex drag takes priority over marquee — if the
+                // mousedown landed on a vertex, the user wants to
+                // move that point, not start a selection.
+                const hit = vertexHitTest(e.latlng);
+                if (hit) {
+                    startVertexDrag(hit, e.latlng);
+                } else {
+                    startMarquee(e);
+                }
             } else if (state.currentTool === 'lasso') {
                 startLasso(e);
             } else if (state.currentTool.startsWith('brush_')) {
@@ -909,13 +1125,15 @@
         });
 
         state.map.on('mousemove', function (e) {
-            if (state.marquee) updateMarquee(e);
+            if (state.vertexDrag) updateVertexDrag(e);
+            else if (state.marquee) updateMarquee(e);
             else if (state.lasso) updateLasso(e);
             else if (state.brush) addBrushSample(e);
         });
 
-        state.map.on('mouseup', function () {
-            if (state.marquee) commitMarquee();
+        state.map.on('mouseup', function (e) {
+            if (state.vertexDrag) commitVertexDrag(e);
+            else if (state.marquee) commitMarquee();
             else if (state.lasso) commitLasso();
             else if (state.brush) commitBrush();
         });
@@ -930,7 +1148,8 @@
         // mouseout-cancels strategy, which would kill gestures whenever
         // the cursor briefly grazes a control.
         document.addEventListener('mouseup', function () {
-            if (state.marquee) commitMarquee();
+            if (state.vertexDrag) commitVertexDrag(null);
+            else if (state.marquee) commitMarquee();
             else if (state.lasso) commitLasso();
             else if (state.brush) commitBrush();
         });

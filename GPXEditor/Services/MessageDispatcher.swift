@@ -61,6 +61,13 @@ public final class MessageDispatcher {
     /// this callback multiple times (one per touched track).
     public var onApplyBrush: ((ApplyBrushPayload) -> Void)?
 
+    /// Called when JS sends `move_point` (M5).  The coordinator routes
+    /// through SessionViewModel.applyMovePoint which registers undo.
+    public var onMovePoint: ((MovePointPayload) -> Void)?
+
+    /// Called when JS sends `add_point_on_line` (M5).
+    public var onAddPointOnLine: ((AddPointOnLinePayload) -> Void)?
+
     public init() {}
 
     /// Dispatch a parsed envelope.  Decodes the payload according to
@@ -95,12 +102,21 @@ public final class MessageDispatcher {
                 self?.onApplyBrush?(payload)
             }
 
+        case "move_point":
+            decodeAndDispatch(raw, type: MovePointPayload.self) { [weak self] payload in
+                self?.onMovePoint?(payload)
+            }
+
+        case "add_point_on_line":
+            decodeAndDispatch(raw, type: AddPointOnLinePayload.self) { [weak self] payload in
+                self?.onAddPointOnLine?(payload)
+            }
+
         // Future-milestone types.  Logging at warning level rather than
         // error makes a stray early message visible during development
         // (the dispatcher is reachable;  the operation just isn't wired
         // yet) without conflating with genuine bridge violations.
-        case "move_point", "add_point_on_line",
-             "place_waypoint", "request_segment_stats":
+        case "place_waypoint", "request_segment_stats":
             logger.warning("Inbound `\(raw.type, privacy: .public)` received but handler not yet implemented")
 
         default:

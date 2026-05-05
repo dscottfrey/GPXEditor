@@ -260,6 +260,91 @@ final class SessionViewModel: ObservableObject {
         registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Smooth Brush")
     }
 
+    // MARK: - Move point (with undo) — M5 vertex draggability
+
+    /// Apply a single-point move from a JS vertex-drag commit.
+    /// Captures the prior session for undo;  same shape as the brush
+    /// operations.  Selection is NOT cleared — moving a point doesn't
+    /// invalidate selection indices, only positions, so a selected
+    /// point that just moved stays selected at its new location.
+    func applyMovePoint(
+        trackId: UUID,
+        segmentId: UUID,
+        pointIndex: Int,
+        latitude: Double,
+        longitude: Double
+    ) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyMovePoint called with no document binding")
+            return
+        }
+
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = MovePointOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            segmentId: segmentId,
+            pointIndex: pointIndex,
+            latitude: latitude,
+            longitude: longitude
+        )
+        if result.touched.isEmpty {
+            // No-op:  stale identifiers or unchanged coordinates.
+            return
+        }
+        documentBinding.wrappedValue.session = result.session
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Move Point")
+    }
+
+    // MARK: - Add point on line (with undo) — M5 click-on-line insert
+
+    /// Apply a click-on-line insertion from a JS polyline click.
+    /// Inserts a new point immediately after `afterIndex`;  elevation
+    /// and timestamp are linearly interpolated from the surrounding
+    /// anchors when both have those values.
+    ///
+    /// Selection adjustment:  any reference whose `pointIndex >
+    /// afterIndex` in the same (track, segment) needs to shift up by
+    /// one because the insertion shifted those points' indices.  We do
+    /// the simplest thing for v1 — clear the selection on insert.  Re-
+    /// indexing live selections is an iteration item if a real workflow
+    /// surfaces a need.
+    func applyAddPointOnLine(
+        trackId: UUID,
+        segmentId: UUID,
+        afterIndex: Int,
+        latitude: Double,
+        longitude: Double
+    ) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyAddPointOnLine called with no document binding")
+            return
+        }
+
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = AddPointOnLineOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            segmentId: segmentId,
+            afterIndex: afterIndex,
+            latitude: latitude,
+            longitude: longitude
+        )
+        if result.touched.isEmpty {
+            return
+        }
+        documentBinding.wrappedValue.session = result.session
+        // Clear selection — any point indices > afterIndex would now
+        // refer to wrong points.  See method doc for the iteration
+        // path if this becomes problematic.
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Add Point")
+    }
+
     // MARK: - Undo plumbing
 
     /// Register an undo that restores the supplied (session, selection)
