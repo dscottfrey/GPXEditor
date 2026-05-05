@@ -5,8 +5,8 @@
 // to suppress local-modification noise from every build.
 
 enum BuildInfo {
-    static let timestamp: String = "2605041618"
-    static let gitSHA: String = "75527d3"
+    static let timestamp: String = "2605051038"
+    static let gitSHA: String = "41141e0"
     static let isDirty: Bool = true
     static let configuration: String = "Debug"
 
