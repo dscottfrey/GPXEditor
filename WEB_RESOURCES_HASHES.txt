@@ -1,0 +1,31 @@
+# WEB_RESOURCES_HASHES.txt
+#
+# SHA-256 hashes of every vendored third-party asset in GPXEditor/WebResources/.
+# Per SECURITY.md "Vendored web assets" and Docs/03_WEB_RESOURCES.md, vendored
+# files are hash-pinned here.  A pre-commit hook (or CI step) recomputes the
+# hashes of staged files and rejects divergence unless this file is updated
+# in the same commit with a message naming the upstream version.
+#
+# Project-authored files (index.html, editor.js, editor.css) are NOT listed
+# here — their authoritative version is the repository content itself.
+#
+# Lines beginning with `#` and blank lines are comments.  The non-comment
+# lines are in `shasum -a 256 -c` format:  64-hex SHA-256, two spaces, path
+# relative to the repository root.  Verify locally from the repository root:
+#
+#     shasum -a 256 -c WEB_RESOURCES_HASHES.txt
+#
+# Updating a vendored file follows the protocol in SECURITY.md "Update
+# protocol for vendored files":  verify upstream legitimacy, download via
+# HTTPS, diff and scan for red flags, replace the vendored file, recompute
+# the hash, update the comment block above the entry to name the new
+# upstream version, commit both the asset change and this file together.
+
+# leaflet.js — Leaflet 1.9.4 — https://unpkg.com/leaflet@1.9.4/dist/leaflet.js
+db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a  GPXEditor/WebResources/leaflet.js
+
+# leaflet.css — Leaflet 1.9.4 — https://unpkg.com/leaflet@1.9.4/dist/leaflet.css
+a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6  GPXEditor/WebResources/leaflet.css
+
+# simplify.js — simplify-js v1.2.4 — https://github.com/mourner/simplify-js/blob/v1.2.4/simplify.js
+e4c7a1a8a141d47103eb82c64eb5286b483ed0efae28ecd238f6232b6d0b7b85  GPXEditor/WebResources/simplify.js

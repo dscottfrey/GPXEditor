@@ -1,55 +1,51 @@
 // ContentView.swift
 //
-// Root view of the document window.  At M1 (the FileDocument /
-// DocumentGroup wiring milestone) it accepts a Binding<GPXEditorDocument>
-// from the surrounding DocumentGroup and shows minimal placeholder
-// content — the project name plus the current track count — to confirm
-// the document is wired up and reading correctly.  The real editing UI
-// (sidebar + map + inspector split view) lands at M5/M8.
+// Root view of the document window.  At M2 (map view + basemap selector)
+// it composes the MapView (the WKWebView surface running Leaflet +
+// editor.js) with a BasemapSelectorView overlay pinned to the top-right.
 //
-// Until then, this view's only purpose is to verify that opening a
-// .gpxeditor file populates the binding with a usable GPXSession and
-// that File -> New produces an empty document with track count 0.
+// The real editing UI grows in around this:  the sidebar / inspector /
+// stats split-view layout lands at M8.  Until then ContentView is a
+// minimal frame around MapView so the WebView fills the window.
+//
+// Track count is no longer displayed — at M2 the WebView itself shows
+// the user whether tracks are present.  If a regression test wants the
+// pre-M2 "track count" verification, it can read
+// `document.session.tracks.count` directly.
 
 import SwiftUI
 
 struct ContentView: View {
 
-    /// Two-way binding to the document.  Any mutation propagates back
-    /// through DocumentGroup's autosave machinery.  Until the editing UI
-    /// lands, this view only reads from the binding — but accepting it
-    /// as Binding (not just letting through a value type) keeps the
-    /// contract correct from M1 onward.
+    /// Two-way binding to the document.  Mutations propagate back
+    /// through DocumentGroup's autosave machinery — the basemap
+    /// selector writes through this binding when the user picks a
+    /// different basemap, and future milestones write track edits and
+    /// viewport state the same way.
     @Binding var document: GPXEditorDocument
 
     var body: some View {
-        VStack(spacing: 12) {
-            // Display name is "GPXeditor" (lowercase 'e') per D-001.
-            // CFBundleDisplayName in Info.plist matches.
-            Text("GPXeditor")
-                .font(.largeTitle)
-
-            // Track count is the simplest correctness signal:  if
-            // import works, this number ticks up; if Reset to Original
-            // works, the count is preserved.  Replaced with the real
-            // sidebar at M8.
-            Text("\(document.session.tracks.count) track\(document.session.tracks.count == 1 ? "" : "s")")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-        .frame(minWidth: 400, minHeight: 240)
-        // Publish this window's document binding into FocusedValues so
-        // menu commands (AppCommands.swift) can find the active document
-        // via @FocusedBinding(\.document).  .focusedSceneValue applies
-        // when the window is the focused scene; nil otherwise — exactly
-        // what we want for a per-window document binding.
-        .focusedSceneValue(\.document, $document)
+        // MapView is the entire screen at M2;  the SwiftUI overlay
+        // stack draws the basemap selector above it without occupying
+        // its own frame.  Padding around the overlay keeps the picker
+        // from kissing the window edges.
+        MapView(document: $document)
+            .overlay(alignment: .topTrailing) {
+                BasemapSelectorView(document: $document)
+                    .padding(12)
+            }
+            // Larger minimum so a sensible map area is always visible.
+            // The minimum is generous because tile rendering at small
+            // sizes wastes time and looks bad;  users can still resize
+            // smaller if they really want to.
+            .frame(minWidth: 640, minHeight: 480)
+            // Publish this window's document binding into FocusedValues
+            // so menu commands (AppCommands.swift) can find the active
+            // document via @FocusedBinding(\.document).
+            .focusedSceneValue(\.document, $document)
     }
 }
 
 #Preview {
-    // Provide a non-mutating binding for the preview.  An actual document
-    // window in a running build gets its binding from DocumentGroup.
     ContentView(document: .constant(GPXEditorDocument()))
 }

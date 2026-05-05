@@ -1,0 +1,52 @@
+/*
+    editor.css — minimal styling for the WKWebView host page.
+
+    Most visual styling for the map comes from leaflet.css (vendored and
+    hash-pinned, do not modify).  This file contains only what's specific
+    to GPXeditor:
+
+      - Make #map fill the WebView edge-to-edge.  Leaflet won't render a
+        usable map if its container has zero height (a Leaflet quirk
+        that surprises every newcomer), so we explicitly size #map to
+        100vh / 100vw.
+
+      - Track-line halo styling.  D-013 / CONVENTIONS.md "Color is never
+        the only signal" requires a contrasting outline behind every
+        track polyline so the line stays visible regardless of basemap.
+        Leaflet doesn't have a native halo facility — we render each
+        polyline twice (a thicker contrasting stroke under a thinner
+        colored one), and the .track-halo class controls the stroke
+        properties of the under layer.
+
+    Anything more elaborate (selection rendering, brush preview overlays,
+    waypoint marker styling) is added as later milestones land it.
+*/
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #f5f5f5;  /* visible only briefly between WebView attach and Leaflet init */
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+#map {
+    width: 100vw;
+    height: 100vh;
+}
+
+/*
+    Halo class applied to every track polyline's under-layer.  Width is
+    deliberately a fixed pixel value (not relative to the colored stroke
+    above it) so the halo is consistently visible across zoom levels.
+    Color is white with partial opacity — works against both light tile
+    bases (OSM Standard) and dark tile bases (Esri Imagery) without
+    flipping per-basemap.
+*/
+.track-halo {
+    stroke: rgba(255, 255, 255, 0.85);
+    stroke-width: 6px;
+    fill: none;
+}

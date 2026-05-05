@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<!--
+    GPXeditor — WebView host page.
+
+    This is the *minimal* host that gets loaded into the WKWebView by
+    Views/MapView.swift via loadFileURL(_:allowingReadAccessTo:).  Its only
+    job is to load the vendored libraries and editor.js, then let the
+    JavaScript side take over.
+
+    Three things in here are non-decorative:
+
+    1. The Content-Security-Policy meta tag.  Per SECURITY.md "Vendored
+       web assets" the CSP is layered defense on top of WKContentRuleList
+       and the loadFileURL access scope.  default-src 'self' blocks any
+       cross-origin load that somehow bypassed both other layers.  img-src
+       additionally allows the curated tile-server origins so Leaflet's
+       own <img> requests for tiles can resolve — those are the *only*
+       cross-origin loads the WebView is permitted to make.  When a tile
+       server is added to or removed from BasemapCatalog, the img-src list
+       below must be updated to match;  the catalog is the source of truth
+       and this CSP is the second line of defense.
+
+    2. The <meta name="viewport"> tag.  The WebView isn't a Mobile Safari
+       browser but the viewport meta is what tells WebKit "render at the
+       sensible CSS-pixel resolution rather than the legacy 980-pixel
+       desktop-default."  Without it Leaflet's tile sizing arithmetic
+       breaks subtly — tiles render too small, gestures land in wrong
+       places.  Standard cross-the-board mobile/embedded WebView setting.
+
+    3. The script load order.  Leaflet must load before simplify.js (which
+       is independent and could load anywhere) and both must load before
+       editor.js (which uses L.* and simplify()).  ES modules are not used
+       deliberately — see CONVENTIONS.md "Modern syntax, no transpilation":
+       a single procedural editor.js script is the right shape for this
+       project's scope.
+
+    The host page contains no UI of its own — the entire user-visible
+    surface is rendered by Leaflet inside #map.  The body has zero
+    margin / padding so #map fills the WebView edge-to-edge;  edit-mode
+    controls (basemap selector etc.) are SwiftUI overlays in MapView, not
+    HTML.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data: blob:
+            https://tile.openstreetmap.org
+            https://*.tile.openstreetmap.org
+            https://tile.opentopomap.org
+            https://*.tile.opentopomap.org
+            https://basemap.nationalmap.gov
+            https://server.arcgisonline.com
+            https://*.tile-cyclosm.openstreetmap.fr;
+        connect-src 'self';
+        font-src 'self';
+        object-src 'none';
+        base-uri 'none';
+        form-action 'none';
+    ">
+    <title>GPXeditor Map</title>
+
+    <link rel="stylesheet" href="leaflet.css">
+    <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+    <!--
+        The Leaflet map mounts here.  #map fills the WebView via editor.css.
+        The Swift side (MapView.swift) sizes the WebView itself; everything
+        inside the WebView fills it.
+    -->
+    <div id="map"></div>
+
+    <!--
+        Library load order matters:  Leaflet defines L.*, simplify.js
+        defines simplify(), and editor.js depends on both.  Loading
+        synchronously in <body> rather than via async/defer because the
+        script sizes are small (Leaflet ~150 KB minified, simplify.js ~3 KB)
+        and the load is from local file:// — there is no network round trip
+        to overlap.  Synchronous is simpler and avoids the "what if editor.js
+        runs before Leaflet finishes parsing" race.
+    -->
+    <script src="leaflet.js"></script>
+    <script src="simplify.js"></script>
+    <script src="editor.js"></script>
+</body>
+</html>

@@ -48,8 +48,9 @@ The application reaches a small, fixed set of external network endpoints and **n
 - `tile.opentopomap.org` — OpenTopoMap, topographic rendering for hiking.
 - `basemap.nationalmap.gov` — USGS National Map (US-only topographic).
 - `server.arcgisonline.com` — Esri World Imagery (satellite verification).
-- One or more CyclOSM mirrors — to be selected at M2 from the published list at `cyclosm.org`.
-- One or more NOAA Charts endpoints — to be confirmed at M2 against the current state of NOAA's chart tile services; if the integration is not clean enough to ship, NOAA Charts is dropped from v1 and tracked as a future addition. See HANDOFF.md.
+- `*.tile-cyclosm.openstreetmap.fr` — CyclOSM (cycle- and hike-oriented OpenStreetMap rendering, hosted by OSM-France). The wildcard subdomain covers the `a` / `b` / `c` rotation Leaflet uses for the standard `{s}` placeholder. Governed by the OSM Foundation tile usage policy referenced under "Identifying User-Agent" below.
+
+NOAA Charts was evaluated for inclusion at M2 and **deferred to v2** because NOAA does not currently publish XYZ-style tile endpoints — only ESRI REST MapServer, WMS, WMTS, and MBTiles. The original criterion ("ship if integration is clean, defer if awkward") resolves to defer. See HANDOFF.md's deferred parking lot for re-evaluation triggers.
 
 **Elevation API:**
 
@@ -66,6 +67,19 @@ For network calls originating in the WKWebView (tile fetching, since Leaflet run
 For network calls originating in Swift code (the elevation API), all `URLSession` traffic is routed through a wrapper that validates the request URL against the allowed Swift-side endpoints before allowing the request to proceed. Any request to a host not in the Swift allow-list raises an error and is logged.
 
 Both mechanisms use the same root configuration: a `NetworkAllowList` Swift type in `Services/` that exposes the lists, with the WebView consumer building a `WKContentRuleList` from the tile domains and the URLSession consumer using the elevation domains directly.
+
+### Identifying User-Agent
+
+Tile-server operators — and especially the OpenStreetMap Foundation's published tile usage policy, which governs not only `tile.openstreetmap.org` directly but every OSM-derived basemap we ship including OpenTopoMap and CyclOSM — require client applications to send a clear, app-identifying `User-Agent` string with every tile request. The default `WKWebView` user agent identifies the embedded WebKit as Safari, which is correct for a browser but wrong for an embedded application: it conceals our identity from operators, and a strict tile server enforcing the policy could rate-limit or block us under that disguise.
+
+GPXeditor sets `WKWebView.customUserAgent` at WebView construction time to a string of the form `GPXeditor/<version> (+<repository URL>)`. The version is the same build-info string surfaced in the About panel; the repository URL is the project's GitHub URL once the public-flip happens at M10 (a placeholder string is acceptable until then because development builds aren't distributed). The `User-Agent` must:
+
+- name the application (`GPXeditor/`),
+- include a version (so a tile-server operator who needs to correlate misbehavior to a specific release has the information they need),
+- include a contact mechanism (the public repository URL — the issue tracker is the contact path of record),
+- not be empty, generic, or library-default.
+
+The requirement is **project-wide**, not scoped to OSM-derived endpoints specifically — every tile fetch identifies us correctly regardless of which basemap the user has selected. The Swift-side `URLSession` traffic (the elevation API in M7 onward) follows the same rule via `URLSessionConfiguration.httpAdditionalHeaders` setting `User-Agent` for every request through the session.
 
 ### Why tile servers are not user-configurable in v1
 
