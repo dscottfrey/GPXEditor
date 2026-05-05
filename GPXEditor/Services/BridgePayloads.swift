@@ -136,6 +136,40 @@ public struct DeletePointsPayload: Decodable {
     public let pointIndices: [Int]
 }
 
+/// Payload for the `apply_brush` inbound message (M4).  Sent by JS on
+/// brush-stroke commit (mouseup).  Per Docs/02_MAP_AND_BRIDGE.md the
+/// stroke geometry — not the JS-computed preview result — is what
+/// crosses the bridge:  Swift re-runs the operation against authoritative
+/// state so a stale local preview can never commit.  A single brush
+/// gesture may produce multiple `apply_brush` messages if the stroke
+/// touches multiple tracks (one message per track_id).
+public struct ApplyBrushPayload: Decodable {
+    public let brushType: String
+    public let trackId: UUID
+    public let stroke: WireBrushStroke
+}
+
+/// Wire representation of a brush stroke.  `kind` mirrors D-015's two
+/// brush specializations — "region" for Simplify / Smooth / Average
+/// (existing-point operations within a circle around the cursor) and
+/// "path" for Add Detail (point-generating along the cursor path).
+/// At M4 only `kind == "region"` is actually used;  the field is
+/// declared now so the wire format doesn't need extending later.
+public struct WireBrushStroke: Decodable {
+    public let kind: String
+    public let samples: [WireStrokeSample]
+}
+
+/// One sample from a brush stroke — typically one cursor position
+/// during the drag.  Each sample carries its own radius_meters so a
+/// future variable-radius brush could vary it within a single gesture;
+/// at M4 every sample carries the same radius.
+public struct WireStrokeSample: Decodable {
+    public let lat: Double
+    public let lon: Double
+    public let radiusMeters: Double
+}
+
 /// Wire representation of one (track, segment, point_indices) group,
 /// shared by `points_selected` (inbound) and `highlight_selection`
 /// (outbound).  Mirrors `Selection.SegmentGroup` from the model layer.
@@ -404,6 +438,8 @@ public struct SetToolPayload: Encodable {
         switch tool {
         case .point: self.tool = "point"
         case .lasso: self.tool = "lasso"
+        case .brushSimplify: self.tool = "brush_simplify"
+        case .brushSmooth: self.tool = "brush_smooth"
         }
     }
 }

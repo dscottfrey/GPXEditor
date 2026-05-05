@@ -50,3 +50,34 @@ html, body {
     stroke-width: 6px;
     fill: none;
 }
+
+/*
+    Brush-preview "would be removed" marker.  M4 uses an X glyph at
+    each point that the canonical simplify commit would drop, so the
+    user can see exactly which points disappear (not just an abstract
+    "this is the simplified line" overlay).  The glyph itself (the X
+    shape) is the primary signal — color is the secondary cue per
+    CONVENTIONS.md "Color is never the only signal."  The white text
+    shadow provides contrast against any basemap (light or dark)
+    without depending on the dark color of the X alone.
+*/
+.brush-removed-glyph {
+    width: 16px;
+    height: 16px;
+    line-height: 14px;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 900;
+    color: #dc2626;
+    text-shadow:
+        -1px -1px 0 #ffffff,
+         1px -1px 0 #ffffff,
+        -1px  1px 0 #ffffff,
+         1px  1px 0 #ffffff,
+         0   -1px 0 #ffffff,
+         0    1px 0 #ffffff,
+        -1px  0   0 #ffffff,
+         1px  0   0 #ffffff;
+    pointer-events: none;
+    user-select: none;
+}

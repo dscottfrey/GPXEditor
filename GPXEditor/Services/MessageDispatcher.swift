@@ -55,6 +55,12 @@ public final class MessageDispatcher {
     /// can route here without further plumbing.
     public var onDeletePoints: ((DeletePointsPayload) -> Void)?
 
+    /// Called when JS sends `apply_brush` (M4).  The coordinator
+    /// dispatches by `brushType` to the right operation and registers
+    /// undo against SessionViewModel.  One brush gesture may invoke
+    /// this callback multiple times (one per touched track).
+    public var onApplyBrush: ((ApplyBrushPayload) -> Void)?
+
     public init() {}
 
     /// Dispatch a parsed envelope.  Decodes the payload according to
@@ -84,12 +90,17 @@ public final class MessageDispatcher {
                 self?.onDeletePoints?(payload)
             }
 
+        case "apply_brush":
+            decodeAndDispatch(raw, type: ApplyBrushPayload.self) { [weak self] payload in
+                self?.onApplyBrush?(payload)
+            }
+
         // Future-milestone types.  Logging at warning level rather than
         // error makes a stray early message visible during development
         // (the dispatcher is reachable;  the operation just isn't wired
         // yet) without conflating with genuine bridge violations.
         case "move_point", "add_point_on_line",
-             "place_waypoint", "apply_brush", "request_segment_stats":
+             "place_waypoint", "request_segment_stats":
             logger.warning("Inbound `\(raw.type, privacy: .public)` received but handler not yet implemented")
 
         default:

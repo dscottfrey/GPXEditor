@@ -6,7 +6,7 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M3 complete (2026-05-05).  Ready to begin M4.
+**Phase:** M4 complete (2026-05-05).  Ready to begin M5.
 
 M2 deliverables shipped and visually verified:  tile rendering works on every catalog basemap, the basemap selector switches cleanly between them, the WKContentRuleList enforces the allow-list, tracks render as polylines on top of tiles, Web Inspector is reachable in Debug builds.  `xcodebuild test` passes (58 tests, no regressions) and `xcodebuild build` produces a signed .app with the vendored web assets in `Contents/Resources/`:
 
@@ -26,7 +26,7 @@ Two project-wide infrastructure improvements landed alongside M1, each documente
 - **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
 - **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
 
-**Next action:** Begin **M4 — Simplify brush** (the first concrete brush;  introduces the `BrushTool` protocol, `RegionBrushTool` specialization, gesture-during-drag preview, and the `apply_brush` / `render_brush_preview` / `clear_brush_preview` bridge messages — all already specified in `Docs/02_MAP_AND_BRIDGE.md`).
+**Next action:** Begin **M5 — Point Tool single-point operations** (vertex draggability, click-on-line to insert, right-click context menu).  This is the milestone where the Adze tedium gets concretely fixed (D-014):  every single-point edit available without leaving the Point Tool.
 
 **M2 deviations and follow-ups (none blocking M3):**
 - **WKContentRuleList `if-domain` vs `url-filter` gotcha** — the first cut of `ContentRuleListBuilder` used `if-domain` for allow rules, which filters by the **page's** domain (file://) rather than the **resource's** domain (https://tile.openstreetmap.org).  Result:  every tile fetch was silently blocked, tiles rendered grey.  Fixed mid-M2 by switching the allow rules to `url-filter` regex on the resource URL.  The lesson is documented in `ContentRuleListBuilder.swift`'s comments — content-blocker format's domain-filter fields are page-scoped, not resource-scoped.
@@ -98,11 +98,33 @@ Tests:  19 new — `SelectionTests` (modifier merges, wire-format round-trip) an
 - **Selection markers stack at high zoom.**  With 1300+ points selected in a tight section, the 5px-radius CircleMarkers overlap each other into a dense row.  Same fix family as the halo:  scale marker radius with zoom, or render selection as a stroke overlay instead of per-point markers when the selection is dense.  Polish for M8 (the sidebar / inspector pass touches selection-rendering ergonomics anyway).
 - **No zoom-to-selection (⌘2) yet.**  M3's keyboard-shortcut list in the original spec named ⌘2 "zooms to selection" but the work landed without it.  Trivial to add (compute LatLngBounds over the selection's points, call `map.fitBounds`, send via a new `zoom_to_bounds` outbound message).  Adding to deferred parking lot rather than reopening M3.
 
-### M4 — Simplify brush
+### M4 — Simplify brush — **Completed 2026-05-05** (with Smooth Brush pulled forward)
 
-Implement the `BrushTool` protocol and `RegionBrushTool` specialization in `Services/`. Implement `SimplifyBrush` as the first concrete brush — RDP simplification applied to the points in the brush region. Brush gesture handling in JS posts brush-stroke messages to Swift; Swift applies the operation and pushes the result back. Live preview during the drag shows the simplified path; release commits as one undo unit. Brush radius is fixed at the v1 default — no slider yet (D-016).
+Lands the first concrete brush (D-014, D-015, D-016) plus the `apply_brush` bridge message and live preview.  Architecture per Occam's Razor:  the `BrushTool` protocol family from D-015 is **deferred to M9** when the second and third brushes (Smooth, Average, AddDetail) earn the abstraction.  At M4 we ship `SimplifyBrush` as a concrete `enum` namespace with a single `apply(...)` static function — same shape DeleteOperation has — and factor out the protocol later when there are real consumers.
 
-Verify: brush over a noisy section, see the simplified result, undo restores the original. Aggressive brushing reduces a 5,000-point track substantially while preserving its shape.
+Pieces:
+
+- `Services/RDPSimplifier.swift` — pure Ramer-Douglas-Peucker function operating in 2D Euclidean space.  Coordinate-system-agnostic (degrees, metres, projected pixels — caller chooses).  Returns the input array's surviving indices so callers can preserve per-point metadata (elevation, timestamp) that's outside the 2D simplification space.
+- `Services/SimplifyBrush.swift` — applies RDPSimplifier to the contiguous index ranges of a track segment that fall within the brush stroke's swept region.  Uses immediate-neighbor anchors so the simplified subrange reconnects cleanly to the untouched parts of the segment.  Brush radius (per-sample on the wire) lets a future variable-radius brush vary radius mid-stroke;  v1 ships fixed 30m radius and 5m RDP tolerance with metres→degrees conversion at the boundary.
+- `Services/BridgePayloads.swift` — `ApplyBrushPayload` (inbound) plus `WireBrushStroke` and `WireStrokeSample` for the nested wire shape.  The schema is the one drafted at M2 in `Docs/02_MAP_AND_BRIDGE.md`'s catalog;  M4 just wires it.
+- `Services/MessageDispatcher.swift` — adds `apply_brush` case routing through a new `onApplyBrush` callback.
+- `Models/EditingTool.swift` — adds `.brushSimplify` case;  wire string is `"brush_simplify"`.
+- `ViewModels/SessionViewModel.swift` — `applySimplifyBrush(trackId:stroke:)` snapshots prior session, applies via SimplifyBrush, registers undo.  Selection is cleared after a brush apply since indices may no longer be valid.  Each touched track is a separate undo unit at M4;  multi-track undo grouping is iteration material.
+- `Views/MapView.swift` — wires `dispatcher.onApplyBrush` to dispatch by `brushType` ("simplify" → SessionViewModel.applySimplifyBrush;  unknown → bridge violation).
+- `Views/AppCommands.swift` — Tools menu entry "Simplify Brush" with `1` keyboard shortcut.
+- `WebResources/editor.js` — brush gesture state, L.circle cursor visualisation following the cursor, live preview using the vendored simplify.js, one `apply_brush` per touched track on commit.  Document-level mouseup safety net catches off-window releases (same pattern marquee / lasso use).
+
+Tests:  17 new — `RDPSimplifierTests` (endpoints always preserved, tolerance behavior, degenerate zero-length-line case, mixed-deviation reduction with index-pinning avoided in favor of invariant assertions) and `SimplifyBrushTests` (no-op cases, real reduction, untouched portions byte-identical, touched-list correctness).  Total now 94;  no regressions.
+
+**M4 outcome notes (deviations and follow-ups):**
+
+- **Smooth Brush pulled forward from M9 to M4** (Scott's feedback during M4 verification:  Simplify alone doesn't match user expectation of "what a brush does" — most users want jitter cleanup, which is Smooth's job).  M4 ships both brushes side-by-side;  M9's roster is now reduced to Average and AddDetail.  Architecture per D-015 (RegionBrushTool family) is still deferred — both brushes are concrete `enum` namespaces with `apply(...)` static functions.  Factor out the protocol when M9's third+fourth brushes earn it.
+- **RDP tolerance bumped 5m → 10m mid-milestone.**  Scott's first verification produced "applySimplifyBrush: prior=1135 new=1131" (4 points dropped) — visually imperceptible.  Bumped to 10m for visibly meaningful results on real GPS tracks.  Still tunable via the deferred "brush hardness slider" (D-016 iteration path).
+- **Smooth Brush kernel half-width tuned 3 → 1 mid-milestone.**  Scott's feedback:  3 (7-point average) was "much too aggressive" — smoothed legitimate trail curves toward straight lines.  1 (3-point average — point + immediate neighbors) is gentler;  Scott's followup:  "might be too subtle, but multiple passes works."  Multiple-pass-as-workaround is acceptable for v1;  the "right" answer is the brush hardness slider in the deferred parking lot.
+- **`apply_brush` preview design split between brushes.**  Initially used a magenta dashed simplified-line overlay for both — Scott found it unclear ("when I brush over a line it turns a color … no points changed").  Replaced for Simplify with red `×` glyphs at to-be-removed points (per-point, shape-primary cue).  Smooth keeps the line-overlay style because the result IS a different shape, not a per-point removal.  Each preview now uses 3+ cues (shape, color, outline/dash) per CONVENTIONS.md "Color is never the only signal."
+- **UUID-case bridge round-trip lesson** that bit M3 didn't bite again at M4 because `apply_brush` only carries `track_id` inbound;  the canonical commit broadcasts `update_tracks` whose lowercase-string-from-WireTrack pattern is already correct.
+
+Tests:  24 new (17 RDP + Simplify, 7 Smooth).  Total now 101;  no regressions.
 
 ### M5 — Point Tool single-point operations
 
@@ -182,7 +204,7 @@ Items discussed during planning, deliberately not built in v1, captured here so 
 **Editing features:**
 - Speed-based trim (start-while-below / end-while-above thresholds; D-018 deferred speed component).
 - Brush radius slider with `[` / `]` keyboard adjustment (D-016 iteration path).
-- Brush hardness slider (D-016 iteration path).
+- Brush hardness slider (D-016 iteration path).  Concretely requested during M4 verification (2026-05-05):  Smooth Brush at kernel half-width 1 felt "too subtle but multiple passes works"; bumping back to 3 felt "much too aggressive."  A user-controlled strength dial (per-stroke or persistent) lets the user pick the right level for the track at hand.  Same applies to Simplify Brush's RDP tolerance.  Implementation:  one Slider per brush in a brushes panel (M8-ish);  alternative — modifier-key-held aggressiveness (Shift = stronger, Option = weaker).
 - Inverse-distance weighted average for the Average brush (D-016 iteration path).
 - Flag-for-review GPS spike detection (Shape B from D-017).
 - Sophisticated spike detection (Hampel filter, Kalman smoothing — D-017 iteration path).

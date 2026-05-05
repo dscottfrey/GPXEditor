@@ -251,6 +251,9 @@ extension MapView {
             self.bridge.dispatcher.onPointsSelected = { [weak self] payload in
                 self?.handlePointsSelected(payload)
             }
+            self.bridge.dispatcher.onApplyBrush = { [weak self] payload in
+                self?.handleApplyBrush(payload)
+            }
         }
 
         /// Called by MapView.updateNSView when SwiftUI propagates a
@@ -405,6 +408,43 @@ extension MapView {
             case .replace: sessionVM.selection.replace(with: refs)
             case .add: sessionVM.selection.add(refs)
             case .subtract: sessionVM.selection.subtract(refs)
+            }
+        }
+
+        /// Apply a brush stroke from JS.  Currently the only brush wired
+        /// is Simplify (M4);  Smooth / Average / AddDetail land at later
+        /// milestones with new branches in this switch.  An unknown
+        /// brush_type is logged as a bridge violation and dropped — the
+        /// dispatcher already validated the envelope, so an unknown
+        /// brush type at this layer is a Swift/JS schema mismatch.
+        private func handleApplyBrush(_ payload: ApplyBrushPayload) {
+            guard let sessionVM = sessionVM else {
+                logger.warning("apply_brush received but no SessionViewModel attached")
+                return
+            }
+            logger.info("handleApplyBrush: brush=\(payload.brushType, privacy: .public) track=\(payload.trackId.uuidString.prefix(8), privacy: .public) samples=\(payload.stroke.samples.count, privacy: .public)")
+
+            switch payload.brushType {
+            case "simplify":
+                let samples = payload.stroke.samples.map {
+                    SimplifyBrush.StrokeSample(
+                        latitude: $0.lat,
+                        longitude: $0.lon,
+                        radiusMeters: $0.radiusMeters
+                    )
+                }
+                sessionVM.applySimplifyBrush(trackId: payload.trackId, stroke: samples)
+            case "smooth":
+                let samples = payload.stroke.samples.map {
+                    SmoothBrush.StrokeSample(
+                        latitude: $0.lat,
+                        longitude: $0.lon,
+                        radiusMeters: $0.radiusMeters
+                    )
+                }
+                sessionVM.applySmoothBrush(trackId: payload.trackId, stroke: samples)
+            default:
+                logger.error("apply_brush unknown brush_type: \(payload.brushType, privacy: .public)")
             }
         }
 

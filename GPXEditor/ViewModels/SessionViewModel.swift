@@ -181,6 +181,85 @@ final class SessionViewModel: ObservableObject {
         registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Delete Points")
     }
 
+    // MARK: - Simplify brush (with undo)
+
+    /// Apply the Simplify brush to a single track using the supplied
+    /// stroke samples (M4).  Captures prior session for undo;  the
+    /// simplify operation can't add points (it only drops them) so the
+    /// inverse is "restore the prior session" — same pattern Delete
+    /// uses.
+    ///
+    /// One brush gesture may invoke this method multiple times (once
+    /// per touched track).  Each invocation is its own undo unit at
+    /// M4;  grouping multi-track-applies into one undo via
+    /// NSUndoManager.beginUndoGrouping is iteration material if the
+    /// multi-track-brush case becomes common.
+    func applySimplifyBrush(trackId: UUID, stroke: [SimplifyBrush.StrokeSample]) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applySimplifyBrush called with no document binding")
+            return
+        }
+
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let priorPointCount = priorSession.tracks
+            .first(where: { $0.id == trackId })?.segments
+            .reduce(0) { $0 + $1.points.count } ?? 0
+
+        let result = SimplifyBrush.apply(to: priorSession, trackId: trackId, stroke: stroke)
+        if result.touched.isEmpty {
+            // Brush stroke didn't touch any segment — no-op, no undo entry.
+            logger.info("applySimplifyBrush: no-op (no segments touched), prior point count=\(priorPointCount, privacy: .public)")
+            return
+        }
+        let newPointCount = result.session.tracks
+            .first(where: { $0.id == trackId })?.segments
+            .reduce(0) { $0 + $1.points.count } ?? 0
+        logger.info("applySimplifyBrush: touched=\(result.touched.count, privacy: .public) prior=\(priorPointCount, privacy: .public) new=\(newPointCount, privacy: .public)")
+
+        documentBinding.wrappedValue.session = result.session
+        // Selection might reference indices that no longer exist after
+        // simplification.  Clear it to avoid stale highlights;  the
+        // user can re-select if they wanted that section selected.
+        selection.clear()
+
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Simplify Brush")
+    }
+
+    // MARK: - Smooth brush (with undo)
+
+    /// Apply the Smooth brush to a single track using the supplied
+    /// stroke samples (M4).  Same shape as Simplify — snapshot,
+    /// apply, register undo.  Smooth doesn't drop points, so undo is
+    /// "restore prior session";  no ambiguity about what's reversed.
+    func applySmoothBrush(trackId: UUID, stroke: [SmoothBrush.StrokeSample]) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applySmoothBrush called with no document binding")
+            return
+        }
+
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = SmoothBrush.apply(to: priorSession, trackId: trackId, stroke: stroke)
+        if result.touched.isEmpty {
+            logger.info("applySmoothBrush: no-op (brushed segments already at kernel-average)")
+            return
+        }
+        logger.info("applySmoothBrush: touched=\(result.touched.count, privacy: .public)")
+
+        documentBinding.wrappedValue.session = result.session
+        // Selection might reference points whose positions just shifted.
+        // The indices are still valid (smoothing doesn't reindex) but
+        // the visible markers would now point at slightly-different
+        // locations than the user selected.  Acceptable;  unlike
+        // Simplify (which can invalidate indices entirely), Smooth's
+        // selection survives meaningfully.
+
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Smooth Brush")
+    }
+
     // MARK: - Undo plumbing
 
     /// Register an undo that restores the supplied (session, selection)

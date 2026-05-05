@@ -19,10 +19,9 @@
 
 import Foundation
 
-/// The currently-active editing tool.  At M3 the wired cases are
-/// `point` (default;  marquee selection plus single-point operations)
-/// and `lasso` (free-form polygon selection).  Future milestones add
-/// brush variants and Waypoint Place.
+/// The currently-active editing tool.  At M4 the wired cases are
+/// `point`, `lasso`, `brushSimplify`, and `brushSmooth`.  Future
+/// milestones add the remaining brush variants and Waypoint Place.
 public enum EditingTool: Equatable, Sendable {
 
     /// Point Tool, keyboard shortcut V.  Default tool.  Single-point
@@ -37,4 +36,23 @@ public enum EditingTool: Equatable, Sendable {
     /// release the points inside the closed polygon become the new
     /// selection (or are added/subtracted per the modifier).
     case lasso
+
+    /// Simplify Brush, keyboard shortcut 1 (D-014 brush family).  Drag
+    /// the cursor over a track section;  on release, redundant points
+    /// (those whose perpendicular distance from the straight line
+    /// connecting their neighbors is below tolerance) are removed via
+    /// RDP (D-015, D-016).  Does NOT move points or smooth jitter —
+    /// pair with Smooth Brush (`2`) for that.
+    case brushSimplify
+
+    /// Smooth Brush, keyboard shortcut 2 (D-014 brush family;  pulled
+    /// forward from M9 to M4 because Scott's first-track verification
+    /// surfaced that "remove jitter and make the points more in a line"
+    /// is what users actually expect from a brush, and Simplify alone
+    /// doesn't do that).  Drag the cursor over a noisy section;  on
+    /// release, every point in the brush region is replaced by the
+    /// uniform average of itself and its `k` nearest neighbors in
+    /// index space.  Doesn't drop any points — pair with Simplify
+    /// (`1`) afterwards if you want fewer points after the smoothing.
+    case brushSmooth
 }

@@ -133,6 +133,20 @@ struct AppCommands: Commands {
 
             Divider()
 
+            Button("Simplify Brush") {
+                sessionVM?.setTool(.brushSimplify)
+            }
+            .keyboardShortcut("1", modifiers: [])
+            .disabled(sessionVM == nil)
+
+            Button("Smooth Brush") {
+                sessionVM?.setTool(.brushSmooth)
+            }
+            .keyboardShortcut("2", modifiers: [])
+            .disabled(sessionVM == nil)
+
+            Divider()
+
             Button("Return to Point Tool") {
                 sessionVM?.returnToPointTool()
             }
