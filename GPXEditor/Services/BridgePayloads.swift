@@ -163,6 +163,56 @@ public struct AddPointOnLinePayload: Decodable {
     public let lon: Double
 }
 
+/// Payload for the `request_context_menu` inbound message (M5
+/// follow-up).  JS detects right-click and posts this with the click
+/// context — either a vertex (track_id, segment_id, point_index) or
+/// empty space (lat, lon).  The view-coordinate `clickX`/`clickY`
+/// fields locate the cursor for menu positioning;  Swift converts
+/// from view coordinates to screen coordinates when calling
+/// `NSMenu.popUp(...)`.
+public struct RequestContextMenuPayload: Decodable {
+    public let target: ContextMenuTarget
+    public let clickX: Double
+    public let clickY: Double
+}
+
+/// Discriminated union of context-menu targets.  Mirrors the wire
+/// format `{kind: "point" | "empty", ...}` decoded via a manual
+/// `init(from:)` since Swift's automatic Codable doesn't handle this
+/// shape natively.
+public enum ContextMenuTarget: Decodable, Equatable, Sendable {
+    case point(trackId: UUID, segmentId: UUID, pointIndex: Int)
+    case empty(latitude: Double, longitude: Double)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, trackId, segmentId, pointIndex, lat, lon
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(String.self, forKey: .kind)
+        switch kind {
+        case "point":
+            self = .point(
+                trackId: try c.decode(UUID.self, forKey: .trackId),
+                segmentId: try c.decode(UUID.self, forKey: .segmentId),
+                pointIndex: try c.decode(Int.self, forKey: .pointIndex)
+            )
+        case "empty":
+            self = .empty(
+                latitude: try c.decode(Double.self, forKey: .lat),
+                longitude: try c.decode(Double.self, forKey: .lon)
+            )
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: c,
+                debugDescription: "Unknown context-menu target kind: \(kind)"
+            )
+        }
+    }
+}
+
 /// Payload for the `apply_brush` inbound message (M4).  Sent by JS on
 /// brush-stroke commit (mouseup).  Per Docs/02_MAP_AND_BRIDGE.md the
 /// stroke geometry — not the JS-computed preview result — is what

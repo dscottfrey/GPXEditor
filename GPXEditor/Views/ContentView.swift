@@ -63,6 +63,27 @@ struct ContentView: View {
             .onChange(of: undoManager) { _, newUndoManager in
                 sessionVM.undoManager = newUndoManager
             }
+            // M5 follow-up:  Edit-Coordinates sheet driven by the
+            // session VM's published request state.  The right-click
+            // context-menu's "Edit Coordinates…" item sets
+            // `editCoordinatesRequest`;  SwiftUI presents the sheet;
+            // the sheet's onCommit calls applyMovePoint with the
+            // entered values.
+            .sheet(item: $sessionVM.editCoordinatesRequest) { request in
+                EditCoordinatesSheet(
+                    initialLatitude: request.initialLatitude,
+                    initialLongitude: request.initialLongitude,
+                    onCommit: { newLat, newLon in
+                        sessionVM.applyMovePoint(
+                            trackId: request.trackId,
+                            segmentId: request.segmentId,
+                            pointIndex: request.pointIndex,
+                            latitude: newLat,
+                            longitude: newLon
+                        )
+                    }
+                )
+            }
     }
 }
 

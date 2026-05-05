@@ -102,6 +102,11 @@ struct MapView: NSViewRepresentable {
         // configuration's user content controller.
         bridge.attach(to: webView)
 
+        // Hold a weak reference on the coordinator so the context-menu
+        // handler (M5 follow-up) can call NSMenu.popUp(in: webView)
+        // without re-fetching the WebView from the bridge.
+        context.coordinator.webView = webView
+
         // Apply the compiled WKContentRuleList asynchronously.  The
         // rule list compile is fast (cached after first build) but is
         // an async API;  we kick it off and have the completion attach
@@ -232,6 +237,12 @@ extension MapView {
         /// updateNSView call is currently in flight.
         private weak var sessionVM: SessionViewModel?
 
+        /// Weak reference to the WebView the coordinator is bound to.
+        /// Set during makeNSView after the WebView is constructed.
+        /// The right-click context-menu handler (M5 follow-up) needs
+        /// the WebView reference to anchor `NSMenu.popUp(in:)` to it.
+        weak var webView: WKWebView?
+
         /// Whether the JS side has reported `ready`.  Until then,
         /// outbound messages are buffered (coordinator holds a snapshot
         /// of the latest desired state and sends it once ready arrives).
@@ -259,6 +270,9 @@ extension MapView {
             }
             self.bridge.dispatcher.onAddPointOnLine = { [weak self] payload in
                 self?.handleAddPointOnLine(payload)
+            }
+            self.bridge.dispatcher.onRequestContextMenu = { [weak self] payload in
+                self?.handleRequestContextMenu(payload)
             }
         }
 
@@ -484,6 +498,52 @@ extension MapView {
             )
         }
 
+        /// Show a native NSMenu in response to a right-click in the
+        /// WebView (M5 follow-up).  Items differ by target — point
+        /// vs empty space.  Each item carries a closure that routes
+        /// to the corresponding SessionViewModel method;  the
+        /// ClosureMenuItem helper bridges between AppKit's selector-
+        /// based action API and Swift closures.
+        private func handleRequestContextMenu(_ payload: RequestContextMenuPayload) {
+            guard let sessionVM = sessionVM, let webView = webView else {
+                logger.warning("request_context_menu received but no SessionViewModel / WebView attached")
+                return
+            }
+            let menu = NSMenu()
+
+            switch payload.target {
+            case .point(let trackId, let segmentId, let pointIndex):
+                menu.addItem(ClosureMenuItem(title: "Delete this Point") { [weak sessionVM] in
+                    sessionVM?.deleteSinglePoint(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(ClosureMenuItem(title: "Edit Coordinates…") { [weak sessionVM] in
+                    sessionVM?.requestEditCoordinates(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(.separator())
+                menu.addItem(ClosureMenuItem(title: "Promote to Waypoint") { [weak sessionVM] in
+                    sessionVM?.applyPromoteToWaypoint(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(ClosureMenuItem(title: "Set as Segment Boundary") { [weak sessionVM] in
+                    sessionVM?.applySetSegmentBoundary(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(.separator())
+                menu.addItem(ClosureMenuItem(title: "Select Entire Segment") { [weak sessionVM] in
+                    sessionVM?.selectEntireSegment(trackId: trackId, segmentId: segmentId)
+                })
+
+            case .empty(let lat, let lon):
+                menu.addItem(ClosureMenuItem(title: "Place Waypoint Here") { [weak sessionVM] in
+                    _ = sessionVM?.applyPlaceWaypoint(latitude: lat, longitude: lon)
+                })
+            }
+
+            // JS sent click coords in container-pixel space (top-left
+            // origin, y-down).  WKWebView is a flipped:true NSView on
+            // macOS, so the same coordinates are valid for popUp(at:in:).
+            let point = NSPoint(x: payload.clickX, y: payload.clickY)
+            menu.popUp(positioning: nil, at: point, in: webView)
+        }
+
         /// Called by MapView when `WKContentRuleListStore` compilation
         /// fails.  Per SECURITY.md, this is a serious error — without
         /// the rule list the WebView can issue arbitrary requests.  We
@@ -538,4 +598,29 @@ extension MapView {
             decisionHandler(.cancel)
         }
     }
+}
+
+// MARK: - ClosureMenuItem
+//
+// NSMenuItem subclass that holds a closure instead of forcing every
+// caller to define @objc selectors.  AppKit natively wires menu items
+// via target/selector;  for the M5 follow-up's context menu we have
+// per-item closures capturing the (track, segment, index) triple
+// each item operates on, and selector-and-representedObject
+// indirection would obscure intent without much benefit.
+
+private final class ClosureMenuItem: NSMenuItem {
+
+    private let closureAction: () -> Void
+
+    init(title: String, closureAction: @escaping () -> Void) {
+        self.closureAction = closureAction
+        super.init(title: title, action: nil, keyEquivalent: "")
+        self.target = self
+        self.action = #selector(invoke)
+    }
+
+    required init(coder: NSCoder) { fatalError("ClosureMenuItem doesn't support archiving") }
+
+    @objc private func invoke() { closureAction() }
 }

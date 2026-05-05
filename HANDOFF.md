@@ -6,7 +6,7 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M5 baseline (drag-to-move + click-on-line) lands 2026-05-05.  Right-click context menu and Edit-Coordinates dialog deferred to a follow-up pass.
+**Phase:** M5 follow-up (right-click context menus + Edit Coordinates) lands 2026-05-05, alongside the baseline (drag-to-move + click-on-line) earlier the same day.  Ready for visual verification, then M6.
 
 M2 deliverables shipped and visually verified:  tile rendering works on every catalog basemap, the basemap selector switches cleanly between them, the WKContentRuleList enforces the allow-list, tracks render as polylines on top of tiles, Web Inspector is reachable in Debug builds.  `xcodebuild test` passes (58 tests, no regressions) and `xcodebuild build` produces a signed .app with the vendored web assets in `Contents/Resources/`:
 
@@ -26,7 +26,15 @@ Two project-wide infrastructure improvements landed alongside M1, each documente
 - **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
 - **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
 
-**Next action:** Visual verification of the M5 baseline.  In Point Tool (`V`):  hover over a polyline vertex (within ~10 px) and drag — the polyline updates live as you drag, releases commit via `move_point` and Swift broadcasts `update_tracks`.  Click on a polyline (not on a vertex) to insert a new point at the click location;  the new point's elevation and timestamp are linearly interpolated from the surrounding anchors.  ⌘Z restores in either case.  After verification, the M5 follow-up (right-click context menu on points + empty space, Edit Coordinates dialog) can land as its own pass.
+**Next action:** Visual verification of M5 (baseline + follow-up).  In Point Tool (`V`):
+
+- **Drag-to-move:**  hover near a polyline vertex (within ~10 px) and drag.  Polyline updates live;  release commits via `move_point`.
+- **Click-on-line insert:**  click on a polyline between vertices.  New point inserts at the projected location, elevation/time interpolated from surrounding anchors.
+- **Right-click on a vertex:**  native context menu with Delete this Point, Edit Coordinates…, Promote to Waypoint, Set as Segment Boundary, Select Entire Segment.
+- **Right-click on empty space:**  native context menu with Place Waypoint Here.
+- **Edit Coordinates… sheet:**  modal SwiftUI sheet with lat/lon fields, range-validated.
+
+⌘Z restores any of the above operations.  After verification, begin **M6 — Track operations:  split, merge, reverse, time-trim**.
 
 **M2 deviations and follow-ups (none blocking M3):**
 - **WKContentRuleList `if-domain` vs `url-filter` gotcha** — the first cut of `ContentRuleListBuilder` used `if-domain` for allow rules, which filters by the **page's** domain (file://) rather than the **resource's** domain (https://tile.openstreetmap.org).  Result:  every tile fetch was silently blocked, tiles rendered grey.  Fixed mid-M2 by switching the allow rules to `url-filter` regex on the resource URL.  The lesson is documented in `ContentRuleListBuilder.swift`'s comments — content-blocker format's domain-filter fields are page-scoped, not resource-scoped.
@@ -126,7 +134,7 @@ Tests:  17 new — `RDPSimplifierTests` (endpoints always preserved, tolerance b
 
 Tests:  24 new (17 RDP + Simplify, 7 Smooth).  Total now 101;  no regressions.
 
-### M5 — Point Tool single-point operations — **Baseline implementation 2026-05-05;  follow-up pending**
+### M5 — Point Tool single-point operations — **Baseline + follow-up complete 2026-05-05**
 
 Lands the headline "Adze tedium fix" features:  vertex draggability and click-on-line insertion.  Right-click context menu and Edit Coordinates dialog deferred to a follow-up pass — the user-feedback loop benefits from getting drag-and-insert into the user's hands as the next iteration cue, and the context-menu items split cleanly into "wired now" (Delete already exists at M3, Promote to Waypoint, Set as Segment Boundary), "needs M7" (Snap to Ground → ElevationService), and "needs Edit Coordinates UI" (a small SwiftUI sheet, separate piece of work).
 
@@ -146,7 +154,22 @@ Pieces shipped:
 
 Tests:  16 new — `MovePointOperationTests` (basic move, metadata preservation, no-op cases) and `AddPointOnLineOperationTests` (insert, interpolation, fallback rules, edge-of-segment positions).  Total now 117;  no regressions.
 
-**Pending — M5 follow-up:**  right-click context menus on points (Delete, Edit Coordinates, Promote to Waypoint, Set as Segment Boundary, Select Entire Segment;  defer Snap to Ground to M7) and on empty space (Place Waypoint Here;  defer Properties of This Location to M7).  Edit Coordinates needs a small SwiftUI sheet.  Promote to Waypoint and Set as Segment Boundary are pure-function operations on the same shape as MovePoint / AddPointOnLine.
+**M5 follow-up shipped same day:**
+
+- `Services/PromoteToWaypointOperation.swift` — converts a track point to a Waypoint at the same lat/lon, removing the track point.  Carries elevation and timestamp over.
+- `Services/SetSegmentBoundaryOperation.swift` — splits a segment into two at the named point.  Point becomes the first point of the new segment;  original segment shrinks.  Color carries over.
+- `Services/PlaceWaypointOperation.swift` — places a new Waypoint at a click location.  Attaches to master track if designated, else first track, else no-op.
+- `Components/EditCoordinatesSheet.swift` — modal SwiftUI sheet with lat/lon text fields.  Range-validated (WGS84 bounds).  OK button gates on parse + range;  inline error message for invalid input (per "describe, don't accuse" rule).  Drives applyMovePoint on commit.
+- `Services/BridgePayloads.swift` — `RequestContextMenuPayload` (inbound) with discriminated `ContextMenuTarget` (point vs empty).
+- `Services/MessageDispatcher.swift` — adds `request_context_menu` case routing through `onRequestContextMenu`.
+- `ViewModels/SessionViewModel.swift` — `applyPromoteToWaypoint`, `applySetSegmentBoundary`, `applyPlaceWaypoint`, `selectEntireSegment`, `deleteSinglePoint`, `requestEditCoordinates` plus the `editCoordinatesRequest: EditCoordinatesRequest?` published trigger.
+- `Views/MapView.swift` — `handleRequestContextMenu` builds an NSMenu with per-target items and shows it via `popUp(at:in:webView)`.  ClosureMenuItem subclass bridges between AppKit's selector-based action API and Swift closures.
+- `Views/ContentView.swift` — `.sheet(item: $sessionVM.editCoordinatesRequest)` presents EditCoordinatesSheet on demand;  the sheet's onCommit calls applyMovePoint.
+- `WebResources/editor.js` — `handleContextMenu` listens for native `contextmenu` events on the map container, classifies into point (within VERTEX_GRAB_TOLERANCE_PX of a vertex) or empty space, posts `request_context_menu`.
+
+Snap to Ground (D-014's vertex-menu spec) and "Properties of This Location" (empty-space-menu spec) are deferred to M7 because they need the ElevationService.
+
+Tests:  16 new — PromoteToWaypoint (5), SetSegmentBoundary (6), PlaceWaypoint (5).  Total now 133;  no regressions.
 
 **Visual-feedback observations surfaced during M5 baseline verification (Scott, 2026-05-05).**  Two related but separately-addressed pieces:
 
@@ -224,7 +247,8 @@ Per D-005, the repository stays private until *all* of the following are checked
 Items discussed during planning, deliberately not built in v1, captured here so they're not lost or accidentally re-implemented. Pull from this list when real use surfaces a need; promote to a `D-XXX` decision in DECISIONS.md and a milestone here when accepted.
 
 **Editing features:**
-- M5 follow-up:  right-click context menus (on points and on empty space) and Edit Coordinates dialog.  See M5 milestone notes for the breakdown by item.
+- **Fuse segment boundary / connect two points** (M5 follow-up observation, 2026-05-05).  Inverse of M5's "Set as Segment Boundary":  given two adjacent segments in a track, merge them into one.  Variations to consider at implementation time:  (a) "Fuse with next" right-click item on any segment's last point or any segment's first point — joins it with its neighbour;  (b) "Connect to point" gesture that picks two arbitrary points and joins their containing segments (more powerful, more design questions about which point becomes which neighbour);  (c) selection-aware "merge selected" that operates on multiple selected segments via the sidebar at M8.  All variations are pure operations on the model layer following the SetSegmentBoundary pattern.
+- M5 follow-up:  Snap to Ground (per-point elevation lookup) and Properties of This Location (empty-space lat/lon/elevation readout) — deferred from the right-click context menus until ElevationService lands at M7.
 - Speed-based trim (start-while-below / end-while-above thresholds; D-018 deferred speed component).
 - Brush radius slider with `[` / `]` keyboard adjustment (D-016 iteration path).
 - Brush hardness slider (D-016 iteration path).  Concretely requested during M4 verification (2026-05-05):  Smooth Brush at kernel half-width 1 felt "too subtle but multiple passes works"; bumping back to 3 felt "much too aggressive."  A user-controlled strength dial (per-stroke or persistent) lets the user pick the right level for the track at hand.  Same applies to Simplify Brush's RDP tolerance.  Implementation:  one Slider per brush in a brushes panel (M8-ish);  alternative — modifier-key-held aggressiveness (Shift = stronger, Option = weaker).

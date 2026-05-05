@@ -1090,6 +1090,52 @@
         return inside;
     }
 
+    // ─── Right-click context menu (M5 follow-up) ─────────────────────────
+    // Right-click anywhere in the WebView posts request_context_menu to
+    // Swift, which presents an NSMenu.  JS doesn't render the menu
+    // itself — Swift's native menu fits the macOS UX without needing
+    // our own HTML menu styling, accessibility plumbing, or keyboard-
+    // navigation work.  We classify the click into "point" (within
+    // VERTEX_GRAB_TOLERANCE_PX of a vertex) or "empty" (everywhere
+    // else, polylines included for now;  per-polyline submenu items
+    // could be added later).
+
+    function handleContextMenu(e) {
+        e.preventDefault();
+        // Translate the native event to Leaflet's container coordinates
+        // — handles the case where the click lands on a polyline child
+        // element (where event.offsetX/Y are relative to that child,
+        // not the map container).
+        const containerPoint = state.map.mouseEventToContainerPoint(e);
+        const latlng = state.map.containerPointToLatLng(containerPoint);
+
+        const hit = vertexHitTest(latlng);
+        let target;
+        if (hit) {
+            target = {
+                kind: 'point',
+                track_id: hit.trackId,
+                segment_id: hit.segmentId,
+                point_index: hit.pointIndex,
+            };
+        } else {
+            target = {
+                kind: 'empty',
+                lat: latlng.lat,
+                lon: latlng.lng,
+            };
+        }
+
+        postToSwift({
+            type: 'request_context_menu',
+            payload: {
+                target: target,
+                click_x: containerPoint.x,
+                click_y: containerPoint.y,
+            },
+        });
+    }
+
     // ─── Map event wiring ────────────────────────────────────────────────
     function attachMapHandlers() {
         state.map.on('mousedown', function (e) {
@@ -1153,6 +1199,14 @@
             else if (state.lasso) commitLasso();
             else if (state.brush) commitBrush();
         });
+
+        // Right-click handler attaches to the map container element so
+        // we catch clicks regardless of whether the cursor was over a
+        // polyline (Leaflet child element) or the map background.
+        // Leaflet's own contextmenu event delivers a synthetic event
+        // that loses the underlying DOM target;  going to the native
+        // event keeps `event.target` accurate for targeting.
+        state.map.getContainer().addEventListener('contextmenu', handleContextMenu);
     }
 
     // ─── Initialization ──────────────────────────────────────────────────

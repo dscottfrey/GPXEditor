@@ -53,6 +53,13 @@ final class SessionViewModel: ObservableObject {
     /// online at later milestones.
     @Published var activeTool: EditingTool = .point
 
+    /// Pending Edit-Coordinates sheet request.  Non-nil while the sheet
+    /// is presented.  ContentView observes this via `.sheet(item:)`
+    /// — assigning a value shows the sheet, clearing it dismisses.
+    /// Triggered by the right-click context-menu's "Edit Coordinates…"
+    /// item;  on commit the sheet calls back into applyMovePoint.
+    @Published var editCoordinatesRequest: EditCoordinatesRequest? = nil
+
     // MARK: - Bridges to the SwiftUI environment
 
     /// Weak reference to the window's UndoManager.  ContentView
@@ -345,6 +352,171 @@ final class SessionViewModel: ObservableObject {
         registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Add Point")
     }
 
+    // MARK: - Delete single point (with undo) — M5 follow-up
+
+    /// Delete a single track point identified by (track, segment,
+    /// index).  Used by the right-click context-menu's "Delete this
+    /// point" item;  doesn't read from `self.selection` so it works
+    /// regardless of what's currently selected.  Removes the point
+    /// from the canonical selection if it was there, so a subsequent
+    /// highlight_selection broadcast doesn't reference a stale index.
+    func deleteSinglePoint(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("deleteSinglePoint called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let oneSelection = Selection(points: [
+            Selection.PointReference(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+        ])
+        let result = DeleteOperation.apply(to: priorSession, deleting: oneSelection)
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.subtract([
+            Selection.PointReference(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+        ])
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Delete Point")
+    }
+
+    // MARK: - Edit Coordinates (request the sheet) — M5 follow-up
+
+    /// Open the Edit-Coordinates sheet for a specific point.  The
+    /// caller (right-click menu handler) supplies the (track, segment,
+    /// index);  we look up the current lat/lon to pre-fill the sheet
+    /// and publish the request via `editCoordinatesRequest`.  The
+    /// sheet's onCommit closure calls applyMovePoint with the new
+    /// values.  Stale identifiers silently no-op — the menu item
+    /// shouldn't have been offered for an unknown point but the
+    /// guard prevents a crash if state has shifted between menu show
+    /// and selection.
+    func requestEditCoordinates(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let session = documentBinding?.wrappedValue.session else { return }
+        guard let track = session.tracks.first(where: { $0.id == trackId }),
+              let segment = track.segments.first(where: { $0.id == segmentId }),
+              pointIndex >= 0, pointIndex < segment.points.count
+        else { return }
+        let p = segment.points[pointIndex]
+        editCoordinatesRequest = EditCoordinatesRequest(
+            trackId: trackId,
+            segmentId: segmentId,
+            pointIndex: pointIndex,
+            initialLatitude: p.latitude,
+            initialLongitude: p.longitude
+        )
+    }
+
+    // MARK: - Promote to Waypoint (with undo) — M5 follow-up
+
+    /// Convert a track point into a Waypoint at the same lat/lon.
+    /// Snapshots prior session for undo.  Selection is cleared since
+    /// the index shift caused by removing the track point can
+    /// invalidate other selected indices.
+    func applyPromoteToWaypoint(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyPromoteToWaypoint called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = PromoteToWaypointOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            segmentId: segmentId,
+            pointIndex: pointIndex
+        )
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Promote to Waypoint")
+    }
+
+    // MARK: - Set Segment Boundary (with undo) — M5 follow-up
+
+    /// Split a track segment at the named point.  The point becomes
+    /// the first point of a new segment;  the original segment shrinks
+    /// to [0..pointIndex - 1].  Selection is cleared because indices
+    /// no longer mean what they did before the split.
+    func applySetSegmentBoundary(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applySetSegmentBoundary called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = SetSegmentBoundaryOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            segmentId: segmentId,
+            pointIndex: pointIndex
+        )
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Set Segment Boundary")
+    }
+
+    // MARK: - Place Waypoint (with undo) — M5 follow-up
+
+    /// Place a new Waypoint at a click location.  Returns whether a
+    /// waypoint was actually placed — the operation is a no-op if the
+    /// project has no tracks (no track to attach the waypoint to).
+    /// The caller (right-click empty-space menu handler) can use this
+    /// to decide whether to show feedback.
+    @discardableResult
+    func applyPlaceWaypoint(latitude: Double, longitude: Double) -> Bool {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyPlaceWaypoint called with no document binding")
+            return false
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = PlaceWaypointOperation.apply(
+            to: priorSession,
+            latitude: latitude,
+            longitude: longitude
+        )
+        guard result.hostTrackId != nil else {
+            // No tracks in the project — nothing to attach to.
+            return false
+        }
+
+        documentBinding.wrappedValue.session = result.session
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Place Waypoint")
+        return true
+    }
+
+    // MARK: - Select Entire Segment (no undo) — M5 follow-up
+
+    /// Replace the selection with every point in the named segment.
+    /// Used by the right-click "Select Entire Segment" context-menu
+    /// item.  Different from `extendSelectionToWholeSegments` which
+    /// expands the existing selection — this one starts fresh from a
+    /// known target.
+    func selectEntireSegment(trackId: UUID, segmentId: UUID) {
+        guard let doc = documentBinding?.wrappedValue else { return }
+        guard let track = doc.session.tracks.first(where: { $0.id == trackId }),
+              let segment = track.segments.first(where: { $0.id == segmentId })
+        else { return }
+
+        var refs: Set<Selection.PointReference> = []
+        for i in segment.points.indices {
+            refs.insert(Selection.PointReference(
+                trackId: trackId,
+                segmentId: segmentId,
+                pointIndex: i
+            ))
+        }
+        selection = Selection(points: refs)
+    }
+
     // MARK: - Undo plumbing
 
     /// Register an undo that restores the supplied (session, selection)
@@ -408,4 +580,22 @@ extension FocusedValues {
         get { self[SessionViewModelFocusedValueKey.self] }
         set { self[SessionViewModelFocusedValueKey.self] = newValue }
     }
+}
+
+// MARK: - EditCoordinatesRequest
+//
+// Wrapper that drives ContentView's .sheet(item:) presentation for
+// the Edit-Coordinates dialog.  Identifiable is required by SwiftUI's
+// `.sheet(item:)`;  the id is fresh each time the sheet is opened
+// (we don't try to reuse the same id across invocations because each
+// open is conceptually a distinct request — the user closing and
+// reopening should re-present the sheet from scratch).
+
+struct EditCoordinatesRequest: Identifiable {
+    let id = UUID()
+    let trackId: UUID
+    let segmentId: UUID
+    let pointIndex: Int
+    let initialLatitude: Double
+    let initialLongitude: Double
 }

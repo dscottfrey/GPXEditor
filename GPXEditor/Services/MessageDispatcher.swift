@@ -68,6 +68,11 @@ public final class MessageDispatcher {
     /// Called when JS sends `add_point_on_line` (M5).
     public var onAddPointOnLine: ((AddPointOnLinePayload) -> Void)?
 
+    /// Called when JS sends `request_context_menu` (M5 follow-up).
+    /// The coordinator builds an NSMenu appropriate to the target
+    /// (point vs empty) and presents it at the click coordinates.
+    public var onRequestContextMenu: ((RequestContextMenuPayload) -> Void)?
+
     public init() {}
 
     /// Dispatch a parsed envelope.  Decodes the payload according to
@@ -110,6 +115,11 @@ public final class MessageDispatcher {
         case "add_point_on_line":
             decodeAndDispatch(raw, type: AddPointOnLinePayload.self) { [weak self] payload in
                 self?.onAddPointOnLine?(payload)
+            }
+
+        case "request_context_menu":
+            decodeAndDispatch(raw, type: RequestContextMenuPayload.self) { [weak self] payload in
+                self?.onRequestContextMenu?(payload)
             }
 
         // Future-milestone types.  Logging at warning level rather than
