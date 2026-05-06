@@ -6,7 +6,7 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M5 follow-up (right-click context menus + Edit Coordinates) lands 2026-05-05, alongside the baseline (drag-to-move + click-on-line) earlier the same day.  Ready for visual verification, then M6.
+**Phase:** M6 in progress.  Reverse / Split / Merge all shipped and verified 2026-05-06.  Trim Track still pending.  Several incidental usability wins landed alongside:  track-count overlay (stopgap until M8 sidebar), `remove_tracks` bridge message, spacebar-pan input override, per-tool cursors, zoom-aware brush-cursor circle.  171 tests pass (38 new operation tests across the three M6 operations, 133 prior, no regressions).
 
 M2 deliverables shipped and visually verified:  tile rendering works on every catalog basemap, the basemap selector switches cleanly between them, the WKContentRuleList enforces the allow-list, tracks render as polylines on top of tiles, Web Inspector is reachable in Debug builds.  `xcodebuild test` passes (58 tests, no regressions) and `xcodebuild build` produces a signed .app with the vendored web assets in `Contents/Resources/`:
 
@@ -26,15 +26,7 @@ Two project-wide infrastructure improvements landed alongside M1, each documente
 - **Build-identifier retrofit** (`Docs/build-identifier-retrofit.md`).  Every build embeds a timestamp + short git SHA + dirty marker, surfaced in the About panel for unambiguous bug-report identification.
 - **Self-signed development certificate** (`Docs/self-signed-cert-for-development.md`, D-019).  Replaces Xcode's free Personal Team automatic signing with a 10-year-validity self-signed cert ("Lab Code Cert"), escaping the periodic certificate-revocation churn that silently breaks builds.  Library validation is relaxed in Debug only via a separate `GPXEditor.Debug.entitlements` file; Release retains the strict production posture.
 
-**Next action:** Visual verification of M5 (baseline + follow-up).  In Point Tool (`V`):
-
-- **Drag-to-move:**  hover near a polyline vertex (within ~10 px) and drag.  Polyline updates live;  release commits via `move_point`.
-- **Click-on-line insert:**  click on a polyline between vertices.  New point inserts at the projected location, elevation/time interpolated from surrounding anchors.
-- **Right-click on a vertex:**  native context menu with Delete this Point, Edit Coordinates…, Promote to Waypoint, Set as Segment Boundary, Select Entire Segment.
-- **Right-click on empty space:**  native context menu with Place Waypoint Here.
-- **Edit Coordinates… sheet:**  modal SwiftUI sheet with lat/lon fields, range-validated.
-
-⌘Z restores any of the above operations.  After verification, begin **M6 — Track operations:  split, merge, reverse, time-trim**.
+**Next action:** Finish M6 with **Trim Track…** — the D-018 dialog (start/end time fields with checkboxes, live-preview red overlay via a new `preview_trim` Swift→JS bridge message, OK commits as one undo unit).  After M6:  M7 — Pin to Ground (DEM elevation correction via OpenTopoData).
 
 **M2 deviations and follow-ups (none blocking M3):**
 - **WKContentRuleList `if-domain` vs `url-filter` gotcha** — the first cut of `ContentRuleListBuilder` used `if-domain` for allow rules, which filters by the **page's** domain (file://) rather than the **resource's** domain (https://tile.openstreetmap.org).  Result:  every tile fetch was silently blocked, tiles rendered grey.  Fixed mid-M2 by switching the allow rules to `url-filter` regex on the resource URL.  The lesson is documented in `ContentRuleListBuilder.swift`'s comments — content-blocker format's domain-filter fields are page-scoped, not resource-scoped.
@@ -179,11 +171,68 @@ Tests:  16 new — PromoteToWaypoint (5), SetSegmentBoundary (6), PlaceWaypoint 
 
 Both captured in the "Visual rendering" deferred parking lot for a dedicated pass.
 
-### M6 — Track operations: split, merge, reverse, time-trim
+### M6 — Track operations: split, merge, reverse, time-trim — **In progress (Reverse / Split / Merge landed 2026-05-06)**
 
 Implement track-level operations in `Services/`: split-at-selected-point, merge-second-track-into-this-one (with confirmation dialog), reverse-direction. Implement the Trim Track dialog (D-018) with two optional time-based trim sections, live preview overlay, OK commits as one undo unit. All operations honor the selection-aware-operations rule.
 
+**Reverse Track shipped 2026-05-06:**
+
+- `Services/ReverseTrackOperation.swift` — pure function flipping segment order within a track AND per-segment point order.  Per-point metadata (elevation, timestamp) stays attached to its point;  segment ids and the track id are preserved;  waypoints are untouched (they have their own lat/lon).  Edge cases:  empty track is a no-op (empty touched-list, no undo entry);  single-point segment goes through the operation (touched-list reports the track) but is geometrically a no-op;  stale trackId is a no-op.
+- `Models/Selection.swift` — added `uniqueTrackId` computed.  Returns the single trackId all selected points belong to, or nil if the selection spans multiple tracks (or is empty).  Drives the menu-disabled gate for track-scoped operations.
+- `ViewModels/SessionViewModel.swift` — `applyReverseTrack(trackId:)` snapshots prior session, applies the operation, registers undo with action name "Reverse Track."  Selection is cleared because every point's index has shifted (preserving selection across reverse would require translating each (segment, index) reference into its mirrored form;  a no-selection result is simpler and less error-prone).
+- `Views/AppCommands.swift` — Edit menu "Reverse Track" item.  Selection-aware:  enabled only when `selection.uniqueTrackId != nil`.  No keyboard shortcut for v1.
+- `Views/MapView.swift` — vertex right-click context menu gets a "Reverse Track" item in its own section (after Select Entire Segment).  Right-clicking a point unambiguously names the containing track, so track-scoped operations belong here in addition to the Edit menu.
+
+Tests:  10 new — `ReverseTrackOperationTests` covering single/multi-segment reverses, per-point metadata preservation, segment identity preservation, waypoints untouched, track id preserved, empty/single-point edge cases, stale-trackId no-op, and reverse-is-its-own-inverse.
+
+**Split Track shipped 2026-05-06:**
+
+- `Services/SplitTrackOperation.swift` — pure function:  original track keeps everything BEFORE the split point;  new track gets the point onward.  Convention:  no point duplication (point becomes first of new track), consistent with SetSegmentBoundary.  Mid-segment splits cut the segment;  segment-boundary splits (pointIndex==0 of non-first segment) move the segment whole-cloth.  New track:  fresh UUID, name "<original> (continued)", empty `immutableOriginalBytes` (born from edit, not import — Reset to Original on it has no source), nil role, inherited recordedDate, no waypoints.  Inserted at trackIndex+1 so it sits next to its parent in any future track-listing UI.  Edge cases:  pointIndex==0 of segment 0 / pointIndex == last point of last segment / stale ids → no-op.
+- `Models/Selection.swift` — added `singlePointReference` computed.  Returns the single PointReference if exactly one point is selected, otherwise nil.
+- `ViewModels/SessionViewModel.swift` — `applySplitTrack(trackId:segmentId:pointIndex:)` snapshots prior session, applies the operation, registers undo as "Split Track."  Selection cleared.
+- `Views/AppCommands.swift` — Edit menu "Split Track at Point", enabled when exactly one point is selected.
+- `Views/MapView.swift` — vertex right-click "Split Track Here" alongside Reverse Track.
+
+Tests:  18 new — `SplitTrackOperationTests` covering mid-segment / boundary splits, multi-segment, color/id preservation, name suffix, empty-bytes, role-not-inherited, recordedDate inheritance, waypoints stay on original, touched-list reports both, insertion ordering, plus all no-op edge cases.
+
+**Merge Tracks shipped 2026-05-06:**
+
+- `Services/MergeTracksOperation.swift` — pure function:  source segments + waypoints append to destination;  source removed.  Destination wins on every identity property (id, name, role, immutableOriginalBytes, recordedDate).  Self-merge / stale ids → no-op.  Re-finds source-by-id after destination mutation to handle source-before-destination ordering correctly.
+- `Components/MergeTrackPickerSheet.swift` — modal SwiftUI sheet listing candidate sources (every track except destination).  Single-select List, Cancel/Merge buttons.  Merge runs an NSAlert confirmation with explicit direction ("Merge X into Y? X will be removed.") before committing.
+- `ViewModels/SessionViewModel.swift` — `requestMergeTracks(destinationId:)` opens the sheet via the published `mergeTracksRequest`;  `applyMergeTracks(sourceId:destinationId:)` runs the operation with snapshot/undo.  `MergeTracksRequest` Identifiable wrapper alongside `EditCoordinatesRequest`.
+- `Views/ContentView.swift` — `.sheet(item: $sessionVM.mergeTracksRequest)` presents the picker.
+- `Views/AppCommands.swift` — Edit menu "Merge Track Into…", enabled when `selection.uniqueTrackId != nil` AND `tracks.count >= 2`.
+- `Views/MapView.swift` — vertex right-click "Merge Track Into…" with the trackCount gate baked into `mergeItem.isEnabled`.
+
+Tests:  10 new — `MergeTracksOperationTests` covering segment append order, waypoint append, source removal, destination identity preservation, source segment data preservation, touched list, self-merge / stale-id no-ops, and the source-before-destination ordering case.
+
+**Reverse design notes:**
+
+- **Both axes flipped, not just one.**  A user reversing a track wants the geometry reversed end-to-end:  segment-2 (which came after segment-1) should now come BEFORE segment-1 in the reversed track, and points within each segment also reverse.  The "only-points-within-segment" alternative was rejected:  it produces "morning recording but in reverse, then afternoon recording but in reverse," which doesn't match user intent.
+- **Timestamps stay attached, even though they go non-monotonic.**  The cleanest answer for "what happens to per-point metadata when you reverse a track" is "nothing — each point keeps its own data."  Timestamps record when the recording happened;  reversing the track doesn't change that history.  Consequence:  a reversed track has monotonically-decreasing timestamps.  The Stats panel (M8) computing speed should take abs() on time deltas or compare adjacent timestamps without assuming order.  Strip-timestamps-on-reverse was considered and rejected as destructive (and undo recovers anyway);  a future "Strip Timestamps" operation can be added if a use case earns it.
+
+**Merge design notes — destination-wins identity:**
+
+- The merged track keeps the destination's id, name, role, immutableOriginalBytes, and recordedDate.  Source's role / bytes / date are dropped.  Rationale:  the user invoked the operation while operating on the destination (its point was selected), establishing it as the "subject" of the edit.  Auto-elevating the merged result to master based on either side's role would be surprising;  user re-tags via M9's master/subsidiary UI if needed.  Reset to Original on the merged track restores the destination's pre-merge state — undoes the merge as part of restoring the destination's full original recording.  Source's bytes are not preserved separately;  ⌘Z is the path to undo the merge specifically.
+- "Merge Track INTO this one" reads selection-as-destination.  The picker presents the SOURCE — the track that will dissolve.  An NSAlert confirmation with explicit direction ("Merge X into Y? X will be removed.") gates the commit so a wrong-direction pick is catchable before it becomes an undo.
+
+**Incidental usability landings during M6 (2026-05-06):**
+
+These weren't on the M6 spec but surfaced as testing pain and got handled inline:
+
+- **Track-count overlay** (`Views/ContentView.swift`).  Stopgap "Tracks: N" pill in the top-left corner so the user can see whether the project has ≥ 2 tracks (the gate for Merge).  Pure SwiftUI overlay, deletable when the M8 sidebar lands — the sidebar is the proper home for project-structure visibility.
+- **`remove_tracks` bridge message** (`Services/BridgePayloads.swift`, `Services/BridgeMessage.swift`, `Views/MapView.swift`, `WebResources/editor.js`).  Merge is the first operation that removes a track from the session;  prior to this, `update_tracks` only handled add/modify and stale Leaflet polylines lingered for the merge's source track until the next load_session.  Now `applyTracksIfChanged` diffs both directions and emits `remove_tracks` for departed track ids;  `handleRemoveTracks` in editor.js tears down the named tracks' halo + line layers and drops them from `state.tracksById`.
+- **Spacebar-pan** (`WebResources/editor.js`).  Pure JS-local input override:  `state.spacebarHeld` flag, document keydown/keyup on `Space` toggles it (with text-input-focused guard), mousedown returns early when held so Leaflet's default drag-to-pan kicks in.  Cursor switches to grab while held;  no Swift state change, no `set_tool` round-trip.  D-014's deferred mid-drag-spacebar-continuation case stays deferred.
+- **Per-tool cursors** (`WebResources/editor.js`).  Point Tool → `default` (arrow);  Lasso Tool → `crosshair`;  Brush tools → `none` (system cursor hidden, Leaflet circle is the cursor — see next item).  Spacebar-held → cleared inline cursor so Leaflet's `.leaflet-grab` class shows grab → grabbing through the drag.  `applyCursor()` is called whenever the tool changes or spacebar state changes.
+- **Zoom-aware brush-cursor circle** (`WebResources/editor.js`).  When a brush tool is active, an L.circle follows the mouse at the actual brush radius in METERS (`BRUSH_RADIUS_METERS = 30`).  Sized in meters means it grows / shrinks with zoom for free — Leaflet handles the pixel conversion.  Hidden during an active stroke (the in-stroke `state.brush.cursorCircle` takes over) and on map mouseout.  Browser cursor URLs were considered and rejected:  CSS cursors cap at ~128 px, don't redraw on zoom, and would require vendoring image assets.
+
+Tests after all M6 work above:  171 (38 new operation tests, 133 prior, no regressions).
+
 Verify: each operation produces correct results that round-trip through Save/Reopen and Export.
+
+**M6 outcome notes (deviations and follow-ups):**
+
+- **Black palette slot is confusing as the first-import default** (Scott's feedback during Merge verification, 2026-05-06).  `DefaultPalette.colors[0]` is `#000000`, the first slot of the Okabe-Ito colorblind-safe palette.  Imports starting from a fresh project get black for their first track, which reads as an error state against light basemaps and obscures the line over many tile features.  Worse:  Scott reported orange (slot 1) and bluish-green (slot 3) reading as similar in his vision, suggesting the formal Okabe-Ito guarantee doesn't fully hold for him.  Three options on the table — reorder so black isn't slot 0, swap to a different palette entirely (would need a D-013 amendment), or add a non-color cue (dashed/dotted patterns rotating per segment, or text labels near each track).  Parked for later;  the palette is editable in Settings at M8/M10 anyway.
 
 ### M7 — Pin to Ground (DEM elevation correction)
 

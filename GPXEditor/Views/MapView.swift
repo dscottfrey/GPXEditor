@@ -230,6 +230,13 @@ extension MapView {
         /// The tool last sent via `set_tool`.  Same gating rule.
         private var lastSentTool: EditingTool?
 
+        /// The trim preview state last sent.  Tracks whether the prior
+        /// broadcast was a preview_trim (with the Equatable groups
+        /// payload) or a clear_trim_preview, so transitions don't
+        /// double-send.  nil = last broadcast was clear (or nothing
+        /// was ever sent).
+        private var lastSentTrimPreview: [TrimTrackOperation.PreviewGroup]?
+
         /// Weak reference to the active SessionViewModel.  Held so the
         /// dispatcher's onPointsSelected callback (registered once at
         /// init time) can route the parsed payload into the
@@ -292,6 +299,7 @@ extension MapView {
             applyTracksIfChanged(in: newDocument)
             applySelectionIfChanged(sessionVM.selection)
             applyToolIfChanged(sessionVM.activeTool)
+            applyTrimPreviewIfChanged(sessionVM.trimPreviewGroups)
         }
 
         /// Called by the bridge's dispatcher when JS sends `ready`.
@@ -338,20 +346,22 @@ extension MapView {
         }
 
         /// Detect track-level changes since the last applied snapshot
-        /// and send `update_tracks` for the changed tracks only.  The
-        /// snapshot is updated atomically on each call so the next
-        /// diff is against the just-sent state.
+        /// and send `update_tracks` for adds/modifies plus
+        /// `remove_tracks` for departed tracks.  The snapshot is
+        /// updated atomically on each call so the next diff is
+        /// against the just-sent state.
         ///
-        /// Removed-track handling:  M3 has no UI surface for removing
-        /// tracks (M8's sidebar adds that), so removal isn't expected
-        /// in practice.  When it does arrive we'll need a separate
-        /// `remove_tracks` outbound message;  for now `update_tracks`
-        /// only handles add and modify.  A removed track would simply
-        /// stop being broadcast, leaving its stale rendering in JS
-        /// until the next load_session.
+        /// Wired at M3 for add/modify;  M6 added the removal path
+        /// alongside Merge Tracks (the first operation that removes a
+        /// track from the session).  Without removal handling, JS
+        /// would keep stale layers around for the merge's source
+        /// track until the next load_session — visually invisible
+        /// when the source and destination overlap, confusing when
+        /// they don't.
         private func applyTracksIfChanged(in document: GPXEditorDocument) {
             let newTracks = document.session.tracks
             let oldByID = Dictionary(uniqueKeysWithValues: lastSentTracks.map { ($0.id, $0) })
+            let newIDs = Set(newTracks.map { $0.id })
 
             var changed: [Track] = []
             for track in newTracks {
@@ -359,9 +369,15 @@ extension MapView {
                     changed.append(track)
                 }
             }
+            let removedIDs = lastSentTracks
+                .map { $0.id }
+                .filter { !newIDs.contains($0) }
 
             if !changed.isEmpty {
                 bridge.send(.updateTracks(UpdateTracksPayload(tracks: changed)))
+            }
+            if !removedIDs.isEmpty {
+                bridge.send(.removeTracks(RemoveTracksPayload(trackIds: removedIDs)))
             }
             lastSentTracks = newTracks
         }
@@ -382,6 +398,23 @@ extension MapView {
             if tool == lastSentTool { return }
             bridge.send(.setTool(SetToolPayload(tool: tool)))
             lastSentTool = tool
+        }
+
+        /// Send preview_trim or clear_trim_preview if the trim
+        /// preview state differs from what JS last received.  nil
+        /// means "no active preview" (clear);  non-nil means render
+        /// the named groups.  Both transitions and value-changes
+        /// produce a single bridge message;  redundant updates are
+        /// suppressed by the equality check.
+        private func applyTrimPreviewIfChanged(_ groups: [TrimTrackOperation.PreviewGroup]?) {
+            if groups == lastSentTrimPreview { return }
+            switch (groups, lastSentTrimPreview) {
+            case (nil, _):
+                bridge.send(.clearTrimPreview(ClearTrimPreviewPayload()))
+            case (let g?, _):
+                bridge.send(.previewTrim(PreviewTrimPayload(groups: g)))
+            }
+            lastSentTrimPreview = groups
         }
 
         // MARK: - Inbound message handling
@@ -529,6 +562,32 @@ extension MapView {
                 menu.addItem(.separator())
                 menu.addItem(ClosureMenuItem(title: "Select Entire Segment") { [weak sessionVM] in
                     sessionVM?.selectEntireSegment(trackId: trackId, segmentId: segmentId)
+                })
+                // Track-scoped operations.  Right-clicking on a point
+                // unambiguously names the containing track, so the
+                // track-scoped roster (Reverse, Split, Merge, Trim as
+                // they land) lives here in addition to the Edit menu.
+                menu.addItem(.separator())
+                menu.addItem(ClosureMenuItem(title: "Split Track Here") { [weak sessionVM] in
+                    sessionVM?.applySplitTrack(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(ClosureMenuItem(title: "Reverse Track") { [weak sessionVM] in
+                    sessionVM?.applyReverseTrack(trackId: trackId)
+                })
+                // Merge Track Into… — disabled if the project has
+                // only one track (no candidate sources).  Setting
+                // .isEnabled directly on the NSMenuItem is the
+                // AppKit equivalent of SwiftUI's .disabled() and
+                // works even though ClosureMenuItem doesn't override
+                // validation logic.
+                let mergeItem = ClosureMenuItem(title: "Merge Track Into…") { [weak sessionVM] in
+                    sessionVM?.requestMergeTracks(destinationId: trackId)
+                }
+                let trackCount = sessionVM.documentBinding?.wrappedValue.session.tracks.count ?? 0
+                mergeItem.isEnabled = trackCount >= 2
+                menu.addItem(mergeItem)
+                menu.addItem(ClosureMenuItem(title: "Trim Track…") { [weak sessionVM] in
+                    sessionVM?.requestTrimTrack(trackId: trackId)
                 })
 
             case .empty(let lat, let lon):

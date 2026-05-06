@@ -83,6 +83,24 @@
                                    //   { type: 'simplify'|'smooth', samples, ... }
         vertexDrag: null,          // active vertex-drag state, see startVertexDrag
                                    //   { trackId, segmentId, pointIndex, originalLatLngs, marker }
+        spacebarHeld: false,       // M6:  while true, mousedown skips the
+                                   // tool-specific gesture and lets Leaflet's
+                                   // default drag-to-pan take over.  Pure
+                                   // input override — does NOT change
+                                   // state.currentTool, so releasing space
+                                   // returns to the prior tool with no
+                                   // round-trip through Swift.
+        brushCursor: null,         // M6:  always-visible L.circle that
+                                   // follows the mouse while a brush tool
+                                   // is active, sized in meters so it
+                                   // accurately previews the brush radius
+                                   // at the current zoom.  See
+                                   // ensureBrushCursor / clearBrushCursor.
+        trimPreviewLayer: null,    // M6:  L.layerGroup of red markers at
+                                   // the points the Trim Track dialog's
+                                   // current bounds would drop on commit.
+                                   // Replaced on each preview_trim;
+                                   // cleared on clear_trim_preview.
     };
 
     // ─── Bridge — outbound (JS -> Swift) ─────────────────────────────────
@@ -134,9 +152,12 @@
     const inboundHandlers = {
         load_session: handleLoadSession,
         update_tracks: handleUpdateTracks,
+        remove_tracks: handleRemoveTracks,
         set_basemap: handleSetBasemap,
         highlight_selection: handleHighlightSelection,
         set_tool: handleSetTool,
+        preview_trim: handlePreviewTrim,
+        clear_trim_preview: handleClearTrimPreview,
         // Future-milestone stubs.  Logging at warning level (rather than
         // silently dispatching) makes a stray early message visible during
         // development without crashing.
@@ -227,6 +248,79 @@
         }
 
         log('info', 'Tracks updated', { track_count: payload.tracks.length });
+    }
+
+    // ─── remove_tracks handler ───────────────────────────────────────────
+    // Tear down the named tracks' Leaflet layers and drop them from
+    // state.tracksById.  Sent by Swift after a Merge or any future
+    // operation that removes tracks from the session;  without this,
+    // stale polylines linger on the map until the next load_session.
+    function handleRemoveTracks(payload) {
+        if (!payload || !Array.isArray(payload.track_ids)) {
+            log('error', 'remove_tracks payload missing track_ids array', { payload: payload });
+            return;
+        }
+        let removed = 0;
+        for (const trackId of payload.track_ids) {
+            const existing = state.tracksById.get(trackId);
+            if (!existing) continue;
+            for (const segmentLayers of existing.segmentLayers.values()) {
+                segmentLayers.halo.remove();
+                segmentLayers.line.remove();
+            }
+            state.tracksById.delete(trackId);
+            removed += 1;
+        }
+        log('info', 'Tracks removed', { requested: payload.track_ids.length, removed: removed });
+    }
+
+    // ─── preview_trim / clear_trim_preview handlers (M6) ────────────────
+    // Live preview of the Trim Track dialog.  Swift sends preview_trim
+    // with the (track, segment, point_indices) groups that would be
+    // dropped if the user clicked OK at this moment.  We render the
+    // points as red CircleMarker overlays.  clear_trim_preview tears
+    // them down on dialog dismissal.  Each preview replaces the prior
+    // one — there's only ever zero or one trim preview at a time.
+    function handlePreviewTrim(payload) {
+        if (!payload || !Array.isArray(payload.groups)) {
+            log('error', 'preview_trim payload missing groups array', { payload: payload });
+            return;
+        }
+        clearTrimPreviewLayer();
+        const layer = L.layerGroup().addTo(state.map);
+        let count = 0;
+        for (const group of payload.groups) {
+            const trackEntry = state.tracksById.get(group.track_id);
+            if (!trackEntry) continue;
+            const segLayers = trackEntry.segmentLayers.get(group.segment_id);
+            if (!segLayers) continue;
+            const latlngs = segLayers.line.getLatLngs();
+            for (const idx of group.point_indices) {
+                if (idx < 0 || idx >= latlngs.length) continue;
+                L.circleMarker(latlngs[idx], {
+                    radius: 4,
+                    color: '#dc2626',         // red 600
+                    weight: 1,
+                    fillColor: '#dc2626',
+                    fillOpacity: 0.85,
+                    interactive: false,
+                }).addTo(layer);
+                count += 1;
+            }
+        }
+        state.trimPreviewLayer = layer;
+        log('info', 'Trim preview rendered', { groups: payload.groups.length, points: count });
+    }
+
+    function handleClearTrimPreview() {
+        clearTrimPreviewLayer();
+    }
+
+    function clearTrimPreviewLayer() {
+        if (state.trimPreviewLayer) {
+            state.trimPreviewLayer.remove();
+            state.trimPreviewLayer = null;
+        }
     }
 
     // Render a single track's polylines into Leaflet, registering the
@@ -379,7 +473,87 @@
         clearBrush();
         clearVertexDrag();
         state.currentTool = payload.tool;
+        applyCursor();
+        // Brush-cursor lifecycle:  create the always-visible circle
+        // when entering a brush tool, tear it down on exit.
+        if (isBrushTool(payload.tool)) {
+            ensureBrushCursor();
+        } else {
+            clearBrushCursor();
+        }
         log('info', 'Tool set', { tool: payload.tool });
+    }
+
+    // Per-tool cursor, applied to the map container.  Native CSS
+    // cursors are used for non-brush tools — `default` (arrow) for
+    // Point, `crosshair` for Lasso.  Brush tools hide the system
+    // cursor entirely (`none`) and instead render a Leaflet L.circle
+    // that follows the mouse at the actual brush radius in meters,
+    // so the size scales correctly with zoom (something a CSS
+    // cursor URL can't do — browsers cap cursor images at ~128px and
+    // don't redraw on zoom).  See ensureBrushCursor / clearBrushCursor.
+    function toolCursor(tool) {
+        if (tool === 'point') return 'default';
+        if (tool === 'lasso') return 'crosshair';
+        if (tool && tool.startsWith('brush_')) return 'none';
+        return 'default';
+    }
+
+    // Apply the cursor for the current input mode.  Spacebar-held
+    // wins:  we clear the inline cursor so Leaflet's .leaflet-grab
+    // class shows grab → grabbing through the drag.  Otherwise the
+    // tool's cursor is applied as an inline style, which overrides
+    // Leaflet's class.
+    function applyCursor() {
+        if (!state.map) return;
+        const container = state.map.getContainer();
+        if (state.spacebarHeld) {
+            container.style.cursor = '';
+        } else {
+            container.style.cursor = toolCursor(state.currentTool);
+        }
+    }
+
+    // Brush-cursor circle:  a Leaflet L.circle that follows the
+    // mouse whenever a brush tool is active and no stroke is in
+    // flight.  Uses the SAME radius (meters) the brush stroke
+    // actually applies, so the visible circle accurately predicts
+    // what a mousedown-drag will affect.  Sized in meters means it
+    // grows / shrinks with zoom for free — Leaflet handles the
+    // pixel conversion.  Hidden during an active stroke (the in-
+    // stroke state.brush.cursorCircle takes over) and when the
+    // cursor leaves the map.
+    function ensureBrushCursor() {
+        if (!state.map) return;
+        if (state.brushCursor) return;
+        // Place at the map center to start;  the first mousemove
+        // moves it under the actual cursor.  Hidden via opacity-0
+        // initially so the user doesn't see a center-of-map flash.
+        state.brushCursor = L.circle(state.map.getCenter(), {
+            radius: BRUSH_RADIUS_METERS,
+            color: '#3b82f6',
+            weight: 1,
+            opacity: 0,
+            fillColor: '#3b82f6',
+            fillOpacity: 0,
+            interactive: false,
+        }).addTo(state.map);
+    }
+    function showBrushCursor() {
+        if (!state.brushCursor) return;
+        state.brushCursor.setStyle({ opacity: 0.8, fillOpacity: 0.15 });
+    }
+    function hideBrushCursor() {
+        if (!state.brushCursor) return;
+        state.brushCursor.setStyle({ opacity: 0, fillOpacity: 0 });
+    }
+    function clearBrushCursor() {
+        if (!state.brushCursor) return;
+        state.brushCursor.remove();
+        state.brushCursor = null;
+    }
+    function isBrushTool(tool) {
+        return typeof tool === 'string' && tool.startsWith('brush_');
     }
 
     // ─── Selection gestures ──────────────────────────────────────────────
@@ -545,6 +719,10 @@
             previewLayer: null,
             moved: false,
         };
+        // Hide the always-on brush cursor while a stroke is active —
+        // the in-stroke cursorCircle takes its place.  Restored on
+        // stroke commit / clear via clearBrush.
+        hideBrushCursor();
         state.map.dragging.disable();
         recomputeBrushPreview();
     }
@@ -611,6 +789,12 @@
             state.brush = null;
         }
         state.map.dragging.enable();
+        // The always-on brush cursor was hidden while the stroke was
+        // active.  Re-show it (the next mousemove repositions it
+        // under the cursor;  showing here means there's no flicker
+        // gap between commit and the next mousemove if the user is
+        // still over the map).
+        if (state.brushCursor) showBrushCursor();
     }
 
     /// Recompute the brush's live preview.  Dispatches on the active
@@ -1139,6 +1323,15 @@
     // ─── Map event wiring ────────────────────────────────────────────────
     function attachMapHandlers() {
         state.map.on('mousedown', function (e) {
+            // Spacebar-pan override (M6):  while space is held, every
+            // mousedown skips the tool-specific gesture so Leaflet's
+            // default drag-to-pan handler is the only thing acting on
+            // the drag.  Returning early here is sufficient because
+            // none of the gesture-starters get called — and crucially
+            // none of them call state.map.dragging.disable(), so
+            // Leaflet's pan stays live.
+            if (state.spacebarHeld) return;
+
             // If the mousedown was inside a polyline's draw area,
             // Leaflet's polyline-click handlers fire separately;  the
             // map-level handler still fires too because the polyline
@@ -1175,6 +1368,29 @@
             else if (state.marquee) updateMarquee(e);
             else if (state.lasso) updateLasso(e);
             else if (state.brush) addBrushSample(e);
+            // Brush-cursor follow.  Only active when no stroke is in
+            // flight — during a stroke the in-stroke
+            // state.brush.cursorCircle takes over, and the always-on
+            // brushCursor stays hidden so the two don't visually
+            // double up.
+            if (state.brushCursor && !state.brush) {
+                state.brushCursor.setLatLng(e.latlng);
+                showBrushCursor();
+            }
+        });
+
+        // Hide the brush cursor when the mouse leaves the map (e.g.,
+        // moves over a SwiftUI overlay or out of the window) so it
+        // doesn't get stuck at the last in-bounds position.  Show
+        // again on mouseover.
+        state.map.on('mouseout', function () {
+            if (state.brushCursor) hideBrushCursor();
+        });
+        state.map.on('mouseover', function (e) {
+            if (state.brushCursor && !state.brush) {
+                state.brushCursor.setLatLng(e.latlng);
+                showBrushCursor();
+            }
         });
 
         state.map.on('mouseup', function (e) {
@@ -1207,6 +1423,41 @@
         // that loses the underlying DOM target;  going to the native
         // event keeps `event.target` accurate for targeting.
         state.map.getContainer().addEventListener('contextmenu', handleContextMenu);
+
+        // Spacebar-pan keyboard handlers (M6).  Listen on the document
+        // so the override fires regardless of which child element has
+        // focus.  We skip the override when an input/textarea has
+        // focus so spacebar still types a space — the WebView has no
+        // such inputs at present, but the guard costs nothing and
+        // keeps the override well-behaved if any are added later.
+        // preventDefault on the keydown stops the browser's default
+        // space-scrolls-the-page behaviour from interfering (the page
+        // has overflow:hidden so there's nothing to scroll, but the
+        // event-cancellation also blocks any focused-button activation
+        // that might otherwise fire).
+        document.addEventListener('keydown', function (e) {
+            if (e.code !== 'Space') return;
+            if (isTextInputFocused()) return;
+            // e.repeat fires while the key is held;  setting the flag
+            // is idempotent but skipping the work avoids redundant
+            // cursor toggles if anything is added there later.
+            if (e.repeat) { e.preventDefault(); return; }
+            state.spacebarHeld = true;
+            applyCursor();
+            e.preventDefault();
+        });
+        document.addEventListener('keyup', function (e) {
+            if (e.code !== 'Space') return;
+            state.spacebarHeld = false;
+            applyCursor();
+        });
+    }
+
+    function isTextInputFocused() {
+        const el = document.activeElement;
+        if (!el) return false;
+        const tag = el.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
     }
 
     // ─── Initialization ──────────────────────────────────────────────────
@@ -1217,6 +1468,10 @@
         }).setView([0, 0], 2);
 
         attachMapHandlers();
+        // Apply the cursor for the default tool (point → arrow) so
+        // the user doesn't briefly see Leaflet's grab cursor before
+        // any set_tool message arrives.
+        applyCursor();
 
         window.gpxEditor = {
             handleMessage: handleMessage,

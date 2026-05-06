@@ -35,6 +35,7 @@
 // Per CONVENTIONS.md, ViewModels/ may import SwiftUI freely.
 
 import SwiftUI
+import AppKit
 import Combine
 import os
 
@@ -59,6 +60,26 @@ final class SessionViewModel: ObservableObject {
     /// Triggered by the right-click context-menu's "Edit Coordinates…"
     /// item;  on commit the sheet calls back into applyMovePoint.
     @Published var editCoordinatesRequest: EditCoordinatesRequest? = nil
+
+    /// Pending Merge-Track-Picker sheet request.  Non-nil while the
+    /// sheet is presented.  Triggered by the "Merge Track Into…" menu
+    /// item;  the destination is established by the selection.  The
+    /// sheet lists candidate sources;  the user's pick + confirmation
+    /// route back through applyMergeTracks.
+    @Published var mergeTracksRequest: MergeTracksRequest? = nil
+
+    /// Pending Trim-Track sheet request.  Non-nil while the sheet is
+    /// presented;  the dialog reads its initial state from this and
+    /// the user's adjustments drive `trimPreviewGroups` for the live
+    /// preview.
+    @Published var trimTrackRequest: TrimTrackRequest? = nil
+
+    /// Live preview groups for the Trim Track dialog.  Nil means "no
+    /// active preview" (MapView sends clear_trim_preview);  non-nil
+    /// means "render the named groups" (MapView sends preview_trim).
+    /// MapView observes this via SwiftUI's update cycle and diff-
+    /// sends only when the value changes.
+    @Published var trimPreviewGroups: [TrimTrackOperation.PreviewGroup]? = nil
 
     // MARK: - Bridges to the SwiftUI environment
 
@@ -462,6 +483,197 @@ final class SessionViewModel: ObservableObject {
         registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Set Segment Boundary")
     }
 
+    // MARK: - Trim Track (with undo) — M6
+
+    /// Open the Trim Track dialog for the named track.  If the track
+    /// has no timestamped points, surface an alert and don't open the
+    /// sheet — there's nothing for the dialog's date pickers to act
+    /// on.  The menu item gates on the same condition but the
+    /// duplicate guard keeps the operation honest if the menu state
+    /// is stale.
+    func requestTrimTrack(trackId: UUID) {
+        guard let session = documentBinding?.wrappedValue.session else { return }
+        guard let track = session.tracks.first(where: { $0.id == trackId }) else { return }
+        guard let range = TrimTrackOperation.timestampRange(of: trackId, in: session) else {
+            // No timestamped points — the operation is meaningless.
+            // Surface via NSAlert per CONVENTIONS.md "describe, don't
+            // accuse":  state the operation, expectation, and
+            // observation without verdict-loading the user's data.
+            let alert = NSAlert()
+            alert.messageText = "Trim Track is unavailable for this track."
+            alert.informativeText = "Trim Track filters by per-point timestamps;  this track has no points with recorded times."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        trimTrackRequest = TrimTrackRequest(
+            trackId: trackId,
+            trackName: track.name,
+            timestampRange: range
+        )
+    }
+
+    /// Recompute the live preview for the dialog's current bounds and
+    /// publish via `trimPreviewGroups`.  MapView observes the
+    /// published change and sends preview_trim through the bridge.
+    /// Both bounds nil clears the preview;  we set [] (empty array)
+    /// in that case rather than nil so the dialog being open with
+    /// nothing-to-trim is distinguishable from the dialog being
+    /// closed.
+    func updateTrimPreview(trackId: UUID, startBefore: Date?, endAfter: Date?) {
+        guard let session = documentBinding?.wrappedValue.session else { return }
+        let groups = TrimTrackOperation.pointsToRemove(
+            in: session,
+            trackId: trackId,
+            trimStartBefore: startBefore,
+            trimEndAfter: endAfter
+        )
+        trimPreviewGroups = groups
+    }
+
+    /// Clear the trim preview.  Called from the sheet's onDisappear so
+    /// MapView re-syncs to "no active preview" via clear_trim_preview.
+    func clearTrimPreview() {
+        trimPreviewGroups = nil
+    }
+
+    /// Apply the trim with snapshot/undo.  Called from the dialog's
+    /// OK button after the preview was already showing what would be
+    /// dropped.  Selection cleared because indices may have shifted.
+    func applyTrimTrack(trackId: UUID, startBefore: Date?, endAfter: Date?) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyTrimTrack called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = TrimTrackOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            trimStartBefore: startBefore,
+            trimEndAfter: endAfter
+        )
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Trim Track")
+    }
+
+    // MARK: - Merge Tracks (with undo) — M6
+
+    /// Open the Merge-Track-Picker sheet for the named destination.
+    /// The picker presents every other track as a candidate source;
+    /// the user selects one and confirms;  on commit the sheet calls
+    /// back into applyMergeTracks.  Stale destination ids silently
+    /// no-op — the menu item shouldn't have been offered for an
+    /// unknown track but the guard prevents a crash.
+    func requestMergeTracks(destinationId: UUID) {
+        guard let session = documentBinding?.wrappedValue.session else { return }
+        guard let destination = session.tracks.first(where: { $0.id == destinationId }) else { return }
+        // Candidate sources:  every track except the destination.
+        // Stripping the destination here (rather than in the sheet)
+        // means the sheet's empty-state can be precise:  "no other
+        // tracks to merge" rather than "no tracks except the one you
+        // can't pick anyway."
+        let candidates = session.tracks.filter { $0.id != destinationId }
+        if candidates.isEmpty {
+            // Nothing to merge — defensive log;  the menu's enabled
+            // gate already requires tracks.count >= 2 so this should
+            // never fire in normal operation.
+            logger.info("requestMergeTracks: no candidate sources")
+            return
+        }
+        mergeTracksRequest = MergeTracksRequest(
+            destinationId: destinationId,
+            destinationName: destination.name,
+            candidates: candidates.map { MergeTracksRequest.Candidate(id: $0.id, name: $0.name) }
+        )
+    }
+
+    /// Apply the merge.  Source segments and waypoints append to the
+    /// destination;  source track is removed.  Selection is cleared
+    /// because indices on the source track no longer have a host
+    /// track at all, and indices on the destination's pre-merge
+    /// segments are still valid but the user's selection mental
+    /// model resets after a structural edit of this size.
+    func applyMergeTracks(sourceId: UUID, destinationId: UUID) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyMergeTracks called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = MergeTracksOperation.apply(
+            to: priorSession,
+            sourceTrackId: sourceId,
+            destinationTrackId: destinationId
+        )
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Merge Tracks")
+    }
+
+    // MARK: - Split Track (with undo) — M6
+
+    /// Split a track into two at the named point.  The original track
+    /// keeps everything up to (but not including) the point;  a new
+    /// track is created holding the named point onward.  Selection is
+    /// cleared because indices on the original track may have shifted
+    /// (the post-split portion no longer belongs to that track).
+    func applySplitTrack(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applySplitTrack called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = SplitTrackOperation.apply(
+            to: priorSession,
+            trackId: trackId,
+            segmentId: segmentId,
+            pointIndex: pointIndex
+        )
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Split Track")
+    }
+
+    // MARK: - Reverse Track (with undo) — M6
+
+    /// Reverse a track's direction.  Flips segment order and the
+    /// per-segment point order;  per-point metadata (elevation,
+    /// timestamp) stays attached to each point.  Selection is cleared
+    /// because every point's index has shifted — preserving selection
+    /// across a reverse would require translating each (segment,
+    /// index) reference into a (segment_count - 1 - segment_index,
+    /// point_count - 1 - point_index) form, and a no-selection result
+    /// after a reverse is the simpler and less error-prone behaviour.
+    /// The user can re-select after reversing if they need to.
+    func applyReverseTrack(trackId: UUID) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyReverseTrack called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = ReverseTrackOperation.apply(to: priorSession, trackId: trackId)
+        if result.touched.isEmpty { return }
+
+        documentBinding.wrappedValue.session = result.session
+        selection.clear()
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Reverse Track")
+    }
+
     // MARK: - Place Waypoint (with undo) — M5 follow-up
 
     /// Place a new Waypoint at a click location.  Returns whether a
@@ -598,4 +810,39 @@ struct EditCoordinatesRequest: Identifiable {
     let pointIndex: Int
     let initialLatitude: Double
     let initialLongitude: Double
+}
+
+// MARK: - MergeTracksRequest
+//
+// Drives ContentView's .sheet(item:) presentation for the merge-
+// track-picker dialog.  Identifiable for SwiftUI;  carries the
+// destination's name (for the sheet's "Merge into <name>" header)
+// and a pre-filtered candidate list (every track except the
+// destination, mapped to lightweight (id, name) records so the
+// sheet doesn't reach back into the session).
+
+struct MergeTracksRequest: Identifiable {
+    let id = UUID()
+    let destinationId: UUID
+    let destinationName: String
+    let candidates: [Candidate]
+
+    struct Candidate: Identifiable, Hashable {
+        let id: UUID
+        let name: String
+    }
+}
+
+// MARK: - TrimTrackRequest
+//
+// Drives ContentView's .sheet(item:) presentation for the Trim
+// Track dialog.  Carries the track id, name (for the dialog
+// header), and the timestamp range (for the date pickers' default
+// values and bounds).
+
+struct TrimTrackRequest: Identifiable {
+    let id = UUID()
+    let trackId: UUID
+    let trackName: String
+    let timestampRange: ClosedRange<Date>
 }

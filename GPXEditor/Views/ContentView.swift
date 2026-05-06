@@ -44,6 +44,22 @@ struct ContentView: View {
                 BasemapSelectorView(document: $document)
                     .padding(12)
             }
+            // Stopgap track-count overlay until the sidebar lands at
+            // M8.  Without any track-listing UI, users have no way
+            // to know how many tracks the project contains, and
+            // gates like "Merge Track Into…" (which require tracks
+            // >= 2) become invisible when their preconditions
+            // aren't met.  Delete this overlay when the M8 sidebar
+            // ships — the sidebar is the proper home for project-
+            // structure visibility.
+            .overlay(alignment: .topLeading) {
+                Text("Tracks: \(document.session.tracks.count)")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(12)
+            }
             .frame(minWidth: 640, minHeight: 480)
             // Publish the document binding (already in M2) and the
             // SessionViewModel into FocusedValues so menu commands
@@ -81,6 +97,54 @@ struct ContentView: View {
                             latitude: newLat,
                             longitude: newLon
                         )
+                    }
+                )
+            }
+            // M6:  Merge-Track-Picker sheet.  The Edit menu's "Merge
+            // Track Into…" item (and the right-click vertex menu's
+            // same item) sets `mergeTracksRequest`;  SwiftUI presents
+            // the picker;  the picker's onCommit calls applyMergeTracks
+            // after running its NSAlert confirmation.
+            .sheet(item: $sessionVM.mergeTracksRequest) { request in
+                MergeTrackPickerSheet(
+                    destinationName: request.destinationName,
+                    candidates: request.candidates,
+                    onCommit: { sourceId in
+                        sessionVM.applyMergeTracks(
+                            sourceId: sourceId,
+                            destinationId: request.destinationId
+                        )
+                    }
+                )
+            }
+            // M6:  Trim Track dialog.  The Edit menu's "Trim Track…"
+            // item (and the right-click vertex-menu equivalent) sets
+            // `trimTrackRequest`;  the sheet's onPreview drives the
+            // live red-marker overlay via SessionViewModel's
+            // `trimPreviewGroups` published state, which MapView
+            // observes and dispatches over the bridge.  onDismiss
+            // (fired on any close path including Escape) clears the
+            // preview;  onCommit applies the trim with undo.
+            .sheet(item: $sessionVM.trimTrackRequest) { request in
+                TrimTrackSheet(
+                    trackName: request.trackName,
+                    timestampRange: request.timestampRange,
+                    onPreview: { startBefore, endAfter in
+                        sessionVM.updateTrimPreview(
+                            trackId: request.trackId,
+                            startBefore: startBefore,
+                            endAfter: endAfter
+                        )
+                    },
+                    onCommit: { startBefore, endAfter in
+                        sessionVM.applyTrimTrack(
+                            trackId: request.trackId,
+                            startBefore: startBefore,
+                            endAfter: endAfter
+                        )
+                    },
+                    onDismiss: {
+                        sessionVM.clearTrimPreview()
                     }
                 )
             }

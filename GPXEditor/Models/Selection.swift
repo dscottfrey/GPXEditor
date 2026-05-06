@@ -56,6 +56,28 @@ public struct Selection: Equatable, Sendable {
     /// Number of selected points across the project.
     public var count: Int { points.count }
 
+    /// The single trackId all selected points belong to, or nil if the
+    /// selection spans multiple tracks (or is empty).  Used by track-
+    /// scoped operations like Reverse Track that disable themselves
+    /// when the selection's scope is ambiguous — an "operate on the
+    /// only-track-touched" idiom.
+    public var uniqueTrackId: UUID? {
+        guard let first = points.first else { return nil }
+        let id = first.trackId
+        for p in points where p.trackId != id { return nil }
+        return id
+    }
+
+    /// The single PointReference if the selection contains exactly
+    /// one point, otherwise nil.  Used by single-point operations
+    /// (Split Track at Point) that need an unambiguous (track,
+    /// segment, index) target from the selection — anything other
+    /// than a one-point selection disables the operation.
+    public var singlePointReference: PointReference? {
+        guard points.count == 1 else { return nil }
+        return points.first
+    }
+
     // MARK: - Mutations
 
     /// Replace the selection with a new set.  Plain mouse-click on the

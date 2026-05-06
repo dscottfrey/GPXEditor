@@ -107,6 +107,64 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut(.delete, modifiers: [])
             .disabled(sessionVM == nil || sessionVM?.selection.isEmpty == true)
+
+            Divider()
+
+            // Track-scoped operations.  Selection-aware:  enabled only
+            // when the selection touches exactly one track, so the
+            // operation has an unambiguous target.  No keyboard
+            // shortcut at v1 — these are infrequent operations and
+            // the keyboard-shortcut budget is reserved for tools and
+            // selection commands.
+            Button("Reverse Track") {
+                if let trackId = sessionVM?.selection.uniqueTrackId {
+                    sessionVM?.applyReverseTrack(trackId: trackId)
+                }
+            }
+            .disabled(sessionVM == nil || sessionVM?.selection.uniqueTrackId == nil)
+
+            // Split needs an unambiguous single-point target — the
+            // exact point at which to split.  Disabled unless the
+            // selection contains exactly one point.
+            Button("Split Track at Point") {
+                if let ref = sessionVM?.selection.singlePointReference {
+                    sessionVM?.applySplitTrack(
+                        trackId: ref.trackId,
+                        segmentId: ref.segmentId,
+                        pointIndex: ref.pointIndex
+                    )
+                }
+            }
+            .disabled(sessionVM == nil || sessionVM?.selection.singlePointReference == nil)
+
+            // Merge needs an unambiguous destination (selection
+            // touches exactly one track) AND at least one other
+            // track to merge in (project has 2+ tracks).
+            Button("Merge Track Into…") {
+                if let trackId = sessionVM?.selection.uniqueTrackId {
+                    sessionVM?.requestMergeTracks(destinationId: trackId)
+                }
+            }
+            .disabled(
+                sessionVM == nil
+                || sessionVM?.selection.uniqueTrackId == nil
+                || (document?.session.tracks.count ?? 0) < 2
+            )
+
+            // Trim Track needs an unambiguous destination (selection
+            // touches exactly one track).  The "track has no
+            // timestamped points" case is caught at request time
+            // with an NSAlert rather than here — the menu's enabled
+            // state staying truthy when the per-track timestamp
+            // condition isn't met is acceptable;  the alert's
+            // explanation is more informative than a silently-
+            // disabled menu item.
+            Button("Trim Track…") {
+                if let trackId = sessionVM?.selection.uniqueTrackId {
+                    sessionVM?.requestTrimTrack(trackId: trackId)
+                }
+            }
+            .disabled(sessionVM == nil || sessionVM?.selection.uniqueTrackId == nil)
         }
 
         // ─── Tool menu — tool switching ──────────────────────────────

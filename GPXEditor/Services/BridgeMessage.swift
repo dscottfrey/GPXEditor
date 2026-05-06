@@ -124,8 +124,11 @@ public enum OutboundMessage {
     case loadSession(LoadSessionPayload)
     case setBasemap(SetBasemapPayload)
     case updateTracks(UpdateTracksPayload)              // M3
+    case removeTracks(RemoveTracksPayload)              // M6 — track removal (Merge)
     case highlightSelection(HighlightSelectionPayload)  // M3
     case setTool(SetToolPayload)                        // M3 — tool switch from menu
+    case previewTrim(PreviewTrimPayload)                // M6 — Trim Track live preview
+    case clearTrimPreview(ClearTrimPreviewPayload)      // M6 — Trim Track dialog dismissal
     // Future-milestone cases (declared here as they come online):
     // case renderBrushPreview(RenderBrushPreviewPayload)  // M4
     // case clearBrushPreview                              // M4
@@ -137,8 +140,11 @@ public enum OutboundMessage {
         case .loadSession: return "load_session"
         case .setBasemap: return "set_basemap"
         case .updateTracks: return "update_tracks"
+        case .removeTracks: return "remove_tracks"
         case .highlightSelection: return "highlight_selection"
         case .setTool: return "set_tool"
+        case .previewTrim: return "preview_trim"
+        case .clearTrimPreview: return "clear_trim_preview"
         }
     }
 
@@ -162,8 +168,11 @@ public enum OutboundMessage {
         case .loadSession(let p): payloadData = try encoder.encode(p)
         case .setBasemap(let p): payloadData = try encoder.encode(p)
         case .updateTracks(let p): payloadData = try encoder.encode(p)
+        case .removeTracks(let p): payloadData = try encoder.encode(p)
         case .highlightSelection(let p): payloadData = try encoder.encode(p)
         case .setTool(let p): payloadData = try encoder.encode(p)
+        case .previewTrim(let p): payloadData = try encoder.encode(p)
+        case .clearTrimPreview(let p): payloadData = try encoder.encode(p)
         }
 
         // Round-trip the payload through JSONSerialization so we can

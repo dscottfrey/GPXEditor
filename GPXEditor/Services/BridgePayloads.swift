@@ -483,6 +483,64 @@ public struct UpdateTracksPayload: Encodable {
     }
 }
 
+/// Payload for the `preview_trim` outbound message.  Sent by the
+/// Trim Track dialog as the user adjusts the start/end bounds —
+/// JS renders the named points with a red highlight so the user
+/// sees exactly which samples will be dropped on commit.  An
+/// empty groups array clears the preview without sending the
+/// companion `clear_trim_preview` message;  both code paths reach
+/// the same JS state.
+public struct PreviewTrimPayload: Encodable {
+    public let groups: [WireSelectionGroup]
+
+    public init(groups: [TrimTrackOperation.PreviewGroup]) {
+        // Reuse WireSelectionGroup as the wire shape — it already
+        // has the (track_id, segment_id, point_indices) triple in
+        // the right snake_case format and lowercase-id convention.
+        // The semantic meaning is different (these points are
+        // "to be removed," not "selected") but the wire envelope
+        // matches and JS dispatches by message type.
+        self.groups = groups.map {
+            WireSelectionGroup(
+                trackId: $0.trackId.uuidString.lowercased(),
+                segmentId: $0.segmentId.uuidString.lowercased(),
+                pointIndices: $0.pointIndices
+            )
+        }
+    }
+}
+
+/// Payload for the `clear_trim_preview` outbound message.  Sent
+/// when the dialog dismisses (OK or Cancel) so the JS preview
+/// overlay tears down cleanly.  Empty payload — the message type
+/// itself is the signal.
+public struct ClearTrimPreviewPayload: Encodable {
+    public init() {}
+}
+
+/// Payload for the `remove_tracks` outbound message.  Sent after a
+/// Swift-side mutation removes one or more tracks from the session
+/// (M6 Merge — source track is absorbed and removed).  JS tears
+/// down the named tracks' Leaflet layers and drops them from its
+/// state.tracksById map.
+///
+/// Wire format:  a list of track ids to remove.  The companion
+/// `update_tracks` message (sent in the same broadcast) carries the
+/// surviving tracks' new state;  this message carries the removed
+/// ones.  Together they describe a complete diff over the track
+/// roster without requiring a full load_session.
+public struct RemoveTracksPayload: Encodable {
+    public let trackIds: [String]
+
+    public init(trackIds: [UUID]) {
+        // Lowercase the UUID strings to match the WireTrack convention
+        // that JS keys state.tracksById by lowercase id strings;  see
+        // the M3 UUID-case round-trip note in HANDOFF.md for context
+        // on why mismatched casing is a silent disaster.
+        self.trackIds = trackIds.map { $0.uuidString.lowercased() }
+    }
+}
+
 /// Payload for the `highlight_selection` outbound message.  Sent any
 /// time the canonical selection changes.  Empty `selection` array
 /// clears the highlight.
