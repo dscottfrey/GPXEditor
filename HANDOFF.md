@@ -361,6 +361,12 @@ Items discussed during planning, deliberately not built in v1, captured here so 
 - **Always-visible track points** (M5 deferred 2026-05-05).  Render every track vertex as a small grey/black CircleMarker by default, system-blue / accent when selected.  Resolves the "I can select invisible points" surprise and unifies the selection-marker / unselected-vertex visual language.  Implementation:  zoom-gated rendering or canvas renderer for the multi-thousand-points case.  See M5 outcome notes for full context.
 - **Selection-ghost fade-out** (M5 deferred 2026-05-05).  Scott's preferred behaviour for the post-drag stale-marker case:  leave the old-position selection markers in place after a Move, fade them out smoothly over ~30 seconds.  Multiple ghosts can stack if the user makes several edits quickly.  Open design question (settle at implementation time):  does the ghost represent still-selected-in-Swift points or is it purely a visual trail with Swift's selection state re-syncing to the new positions immediately?  See M5 outcome notes for full context.
 
+## Final session tasks
+
+Things to do at the very end of the project's GPXeditor-active phase, after all the milestone and pre-public-release work is complete.  Strictly the *last* tasks before the workspace effectively becomes maintenance-only.
+
+- **Mine `~/.claude/projects/-Users-scott-Documents-Code-GPXEditor/memory/` for cross-project best-practices content** (noted 2026-05-07).  Scott maintains a separate workspace for personal "best practices" documentation;  the memory entries accumulated over this project capture working agreements between Scott and Claude that may generalize beyond GPXeditor (the existing entries cover error-message style, filesystem scope discipline, minimal-option recommendations without dual-offering, glossary maintenance — and more will accumulate as the project progresses).  Per-project memory doesn't auto-flow between workspaces, so this is a manual harvest:  walk through each memory file, identify which lessons are project-agnostic, and pass those over to the best-practices workspace.  Do this *last* — letting the memory directory continue to accumulate through M7-M10 means the harvest captures the full history rather than a partial snapshot.
+
 ## Update protocol for this document
 
 This document is updated continuously as the project evolves. When updating:
