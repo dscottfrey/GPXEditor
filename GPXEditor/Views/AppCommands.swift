@@ -200,6 +200,45 @@ struct AppCommands: Commands {
             )
         }
 
+        // ─── Track menu — sidebar-driven track-scoped operations (M7.5) ──
+        //
+        // Mirrors the right-click context menu in the M7.5 sidebar so
+        // the same actions are reachable via the menu bar (per
+        // CONVENTIONS.md "all right-click items reachable via menus").
+        // Items target whichever track is currently selected in the
+        // sidebar — `sessionVM.selectedSidebarTrackId`.  Disabled when
+        // no track is selected.
+        //
+        // Why a separate Track menu rather than slotting into Edit:
+        // the Edit menu is already crowded with selection commands
+        // and editing operations;  a dedicated Track menu reads
+        // cleanly in the menu bar and makes the track-as-subject
+        // pattern explicit.
+        CommandMenu("Track") {
+            Button("Zoom to Fit") {
+                if let trackId = sessionVM?.selectedSidebarTrackId {
+                    sessionVM?.zoomToTrack(trackId: trackId)
+                }
+            }
+            .disabled(sessionVM?.selectedSidebarTrackId == nil)
+
+            Button("Select All Points") {
+                if let trackId = sessionVM?.selectedSidebarTrackId {
+                    sessionVM?.selectEntireTrack(trackId: trackId)
+                }
+            }
+            .disabled(sessionVM?.selectedSidebarTrackId == nil)
+
+            Divider()
+
+            Button("Delete Track") {
+                if let trackId = sessionVM?.selectedSidebarTrackId {
+                    sessionVM?.deleteTrack(trackId: trackId)
+                }
+            }
+            .disabled(sessionVM?.selectedSidebarTrackId == nil)
+        }
+
         // ─── Tool menu — tool switching ──────────────────────────────
         // Single-key shortcuts per D-014.  No modifier — pressing V
         // anywhere in a focused window switches to Point Tool.  Escape

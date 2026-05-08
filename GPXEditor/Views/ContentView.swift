@@ -1,13 +1,18 @@
 // ContentView.swift
 //
-// Root view of the document window.  At M3 it composes:
+// Root view of the document window.  At M7.5 it composes:
 //
-//   - MapView (the WKWebView surface running Leaflet + editor.js).
-//   - BasemapSelectorView pinned to the top-right as an overlay.
-//   - The per-window SessionViewModel — created here as @StateObject so
-//     each document window has its own selection / tool state, published
-//     into FocusedValues so AppCommands menu items can address the
-//     active window's view model.
+//   - A NavigationSplitView with the track-list Sidebar on the left
+//     and the MapView (WKWebView surface running Leaflet + editor.js)
+//     as the detail.  Sidebar is hideable via NavigationSplitView's
+//     built-in toolbar toggle (which AppKit also surfaces as
+//     View → Show/Hide Sidebar automatically — no extra wiring).
+//   - BasemapSelectorView pinned to the top-right of the detail as
+//     an overlay.
+//   - The per-window SessionViewModel — created here as @StateObject
+//     so each document window has its own selection / tool / sidebar-
+//     selection state, published into FocusedValues so AppCommands
+//     menu items can address the active window's view model.
 //
 // The wiring of SessionViewModel.documentBinding and .undoManager
 // happens here too:  SwiftUI's @StateObject creates the view model
@@ -34,33 +39,53 @@ struct ContentView: View {
     /// future operations register undo against the correct manager.
     @Environment(\.undoManager) private var undoManager
 
+    /// M7.5 inspector pane visibility.  Defaults to visible —
+    /// during the M7.5/M8 testing-and-build phase the inspector is
+    /// the primary verification tool, so showing it on first launch
+    /// surfaces it before the user has to discover the toggle.
+    /// SwiftUI's .inspector(isPresented:) modifier provides the
+    /// toolbar toggle button and the View-menu Show/Hide entry
+    /// automatically.
+    @State private var inspectorPresented: Bool = true
+
     var body: some View {
-        // MapView is the entire screen at M3;  the SwiftUI overlay
-        // stack draws the basemap selector above it without occupying
-        // its own frame.  Padding around the overlay keeps the picker
-        // from kissing the window edges.
-        MapView(document: $document, sessionVM: sessionVM)
-            .overlay(alignment: .topTrailing) {
-                BasemapSelectorView(document: $document)
-                    .padding(12)
-            }
-            // Stopgap track-count overlay until the sidebar lands at
-            // M8.  Without any track-listing UI, users have no way
-            // to know how many tracks the project contains, and
-            // gates like "Merge Track Into…" (which require tracks
-            // >= 2) become invisible when their preconditions
-            // aren't met.  Delete this overlay when the M8 sidebar
-            // ships — the sidebar is the proper home for project-
-            // structure visibility.
-            .overlay(alignment: .topLeading) {
-                Text("Tracks: \(document.session.tracks.count)")
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-                    .padding(12)
-            }
-            .frame(minWidth: 640, minHeight: 480)
+        NavigationSplitView {
+            // Left pane:  M7.5 track-list sidebar.  Hideable via
+            // the NavigationSplitView toolbar toggle / View menu.
+            Sidebar(document: $document, sessionVM: sessionVM)
+        } detail: {
+            // Detail pane:  MapView fills the available space.  The
+            // basemap selector is anchored at the top-right corner
+            // as an overlay so it floats above the WebView without
+            // claiming layout space of its own.  The M7.5 elevation
+            // graph is anchored at the bottom and slides in/out
+            // based on selection state — visible only when the
+            // selection has at least one point, hidden otherwise.
+            MapView(document: $document, sessionVM: sessionVM)
+                .overlay(alignment: .topTrailing) {
+                    BasemapSelectorView(document: $document)
+                        .padding(12)
+                }
+                .overlay(alignment: .bottom) {
+                    if !sessionVM.selection.isEmpty {
+                        ElevationGraph(document: $document, sessionVM: sessionVM)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: sessionVM.selection.isEmpty)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 1000, minHeight: 480)
+        // M7.5 inspector pane.  `.inspector(isPresented:)` adds a
+        // hideable right-side pane and (on macOS 14+) automatically
+        // surfaces a toolbar toggle plus the View → Show/Hide
+        // Inspector menu entry.  Default visible because the
+        // inspector is the primary verification surface during the
+        // current build phase.
+        .inspector(isPresented: $inspectorPresented) {
+            Inspector(document: $document, sessionVM: sessionVM)
+                .inspectorColumnWidth(min: 220, ideal: 260, max: 360)
+        }
             // Publish the document binding (already in M2) and the
             // SessionViewModel into FocusedValues so menu commands
             // can find both.  Both bindings/values are scene-scoped:

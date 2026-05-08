@@ -518,6 +518,46 @@ public struct ClearTrimPreviewPayload: Encodable {
     public init() {}
 }
 
+/// Payload for the `zoom_to_bounds` outbound message (M7.5).  Sent
+/// when the user invokes "Zoom to Fit" on a track in the sidebar
+/// (or — eventually — ⌘2 "Zoom to Selection" from the parking-lot
+/// items).  JS calls Leaflet's `map.fitBounds([[south, west],
+/// [north, east]])` with reasonable padding so the requested
+/// region renders fully visible without kissing the viewport edges.
+///
+/// All four fields are WGS84 decimal degrees per the bridge
+/// protocol's coordinate convention.  North > south and east > west
+/// is the caller's responsibility (Leaflet tolerates the inverse
+/// but the result wouldn't match user intent).
+public struct ZoomToBoundsPayload: Encodable {
+    public let northLat: Double
+    public let southLat: Double
+    public let eastLon: Double
+    public let westLon: Double
+
+    public init(
+        northLat: Double,
+        southLat: Double,
+        eastLon: Double,
+        westLon: Double
+    ) {
+        self.northLat = northLat
+        self.southLat = southLat
+        self.eastLon = eastLon
+        self.westLon = westLon
+    }
+
+    enum CodingKeys: String, CodingKey {
+        // Explicit because the snake-case strategy on `northLat`
+        // produces `north_lat` — that's correct, but declaring
+        // them here keeps the wire contract self-documenting.
+        case northLat = "north_lat"
+        case southLat = "south_lat"
+        case eastLon = "east_lon"
+        case westLon = "west_lon"
+    }
+}
+
 /// Payload for the `remove_tracks` outbound message.  Sent after a
 /// Swift-side mutation removes one or more tracks from the session
 /// (M6 Merge — source track is absorbed and removed).  JS tears

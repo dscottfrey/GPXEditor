@@ -237,6 +237,13 @@ extension MapView {
         /// was ever sent).
         private var lastSentTrimPreview: [TrimTrackOperation.PreviewGroup]?
 
+        /// The id of the last zoom_to_bounds we dispatched (M7.5).
+        /// SessionViewModel mints a fresh UUID per `zoomToTrack` call,
+        /// so a never-seen-before id means "user just requested another
+        /// zoom" and we send it through the bridge.  nil = we've never
+        /// dispatched a zoom yet.
+        private var lastSentZoomBoundsId: UUID?
+
         /// Weak reference to the active SessionViewModel.  Held so the
         /// dispatcher's onPointsSelected callback (registered once at
         /// init time) can route the parsed payload into the
@@ -300,6 +307,7 @@ extension MapView {
             applySelectionIfChanged(sessionVM.selection)
             applyToolIfChanged(sessionVM.activeTool)
             applyTrimPreviewIfChanged(sessionVM.trimPreviewGroups)
+            applyZoomTriggerIfChanged(sessionVM.zoomBoundsTrigger)
         }
 
         /// Called by the bridge's dispatcher when JS sends `ready`.
@@ -415,6 +423,24 @@ extension MapView {
                 bridge.send(.previewTrim(PreviewTrimPayload(groups: g)))
             }
             lastSentTrimPreview = groups
+        }
+
+        /// Send `zoom_to_bounds` if the trigger's id is one we
+        /// haven't dispatched yet.  Per SessionViewModel.zoomToTrack
+        /// each call mints a fresh UUID, so two requests for the
+        /// SAME bounds still trigger a re-fit on the JS side.  No-op
+        /// when the trigger is nil (no zoom requested) or when the
+        /// id matches the last one we sent (already dispatched).
+        private func applyZoomTriggerIfChanged(_ trigger: ZoomBoundsTrigger?) {
+            guard let trigger = trigger else { return }
+            if trigger.id == lastSentZoomBoundsId { return }
+            bridge.send(.zoomToBounds(ZoomToBoundsPayload(
+                northLat: trigger.bounds.north,
+                southLat: trigger.bounds.south,
+                eastLon: trigger.bounds.east,
+                westLon: trigger.bounds.west
+            )))
+            lastSentZoomBoundsId = trigger.id
         }
 
         // MARK: - Inbound message handling

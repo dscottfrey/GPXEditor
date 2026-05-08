@@ -158,6 +158,7 @@
         set_tool: handleSetTool,
         preview_trim: handlePreviewTrim,
         clear_trim_preview: handleClearTrimPreview,
+        zoom_to_bounds: handleZoomToBounds,
         // Future-milestone stubs.  Logging at warning level (rather than
         // silently dispatching) makes a stray early message visible during
         // development without crashing.
@@ -168,6 +169,36 @@
             log('warning', 'clear_brush_preview not yet implemented (M4)');
         },
     };
+
+    // ─── zoom_to_bounds handler (M7.5) ───────────────────────────────────
+    //
+    // Sent by Swift when the user picks "Zoom to Fit" on a track in the
+    // sidebar (or — eventually — invokes ⌘2 "Zoom to Selection").  The
+    // payload carries the lat/lon envelope to fit;  we hand it to
+    // Leaflet's map.fitBounds with reasonable padding so the requested
+    // region renders fully visible without kissing the viewport edges.
+    function handleZoomToBounds(payload) {
+        if (!payload
+            || typeof payload.north_lat !== 'number'
+            || typeof payload.south_lat !== 'number'
+            || typeof payload.east_lon !== 'number'
+            || typeof payload.west_lon !== 'number'
+        ) {
+            log('error', 'zoom_to_bounds payload missing required fields', { payload: payload });
+            return;
+        }
+        // Leaflet's LatLngBounds takes [southWest, northEast] corners.
+        const southWest = [payload.south_lat, payload.west_lon];
+        const northEast = [payload.north_lat, payload.east_lon];
+        // padding in pixels — leaves the requested region inside an
+        // inset rectangle rather than running tracks right to the edge.
+        // 40px on each side is a comfortable default;  smaller for
+        // tight fits on small windows is a future tuning item.
+        state.map.fitBounds([southWest, northEast], {
+            padding: [40, 40],
+            animate: true,
+        });
+    }
 
     // ─── load_session handler ────────────────────────────────────────────
     function handleLoadSession(payload) {

@@ -90,6 +90,26 @@ final class SessionViewModel: ObservableObject {
     /// operations rule in CONVENTIONS.md.
     @Published var pinToGroundRequest: PinToGroundRequest? = nil
 
+    /// The track currently selected in the M7.5 sidebar, if any.
+    /// Distinct from `selection` (which is per-point) — this is the
+    /// "user clicked on a track row in the sidebar" affordance,
+    /// used by the Inspector to show track-level info when no
+    /// individual points are selected.  Nil means no sidebar
+    /// selection (Inspector falls back to project-metadata mode or
+    /// the points-selection-driven mode).
+    @Published var selectedSidebarTrackId: UUID? = nil
+
+    /// One-shot trigger for the `zoom_to_bounds` bridge message
+    /// (M7.5).  Each invocation of `zoomToTrack(trackId:)` (and
+    /// future ⌘2 "Zoom to Selection") sets a new value with a
+    /// fresh UUID id.  MapView's coordinator observes via
+    /// SwiftUI's update cycle and dispatches the bridge message
+    /// when it sees a previously-unseen id.  The fresh-UUID-per-call
+    /// pattern means two consecutive zooms to the SAME bounds still
+    /// trigger a re-fit (Equatable comparison on the wrapper finds
+    /// them different because the ids differ).
+    @Published var zoomBoundsTrigger: ZoomBoundsTrigger? = nil
+
     // MARK: - Bridges to the SwiftUI environment
 
     /// Weak reference to the window's UndoManager.  ContentView
@@ -993,6 +1013,127 @@ final class SessionViewModel: ObservableObject {
         alert.runModal()
     }
 
+    // MARK: - Sidebar-driven track operations (M7.5)
+
+    /// Replace the selection with every point in the named track.
+    /// Used by the sidebar's right-click "Select All Points" item
+    /// and its companion in the Track menu.  Selection is window-
+    /// scoped transient state, not undoable (matches selectAll's
+    /// existing posture).  No-op if the trackId doesn't resolve.
+    func selectEntireTrack(trackId: UUID) {
+        guard let doc = documentBinding?.wrappedValue else {
+            logger.warning("selectEntireTrack called with no document binding")
+            return
+        }
+        guard let track = doc.session.tracks.first(where: { $0.id == trackId }) else {
+            return
+        }
+        var refs: Set<Selection.PointReference> = []
+        for segment in track.segments {
+            for i in segment.points.indices {
+                refs.insert(Selection.PointReference(
+                    trackId: track.id,
+                    segmentId: segment.id,
+                    pointIndex: i
+                ))
+            }
+        }
+        selection = Selection(points: refs)
+    }
+
+    /// Delete a track from the session entirely.  Captures prior
+    /// session and selection so undo restores both;  also clears
+    /// the sidebar selection if it pointed at the deleted track
+    /// (matching the "stale references shouldn't hang around" rule
+    /// the rest of the editing operations follow).  No-op if the
+    /// trackId doesn't resolve.
+    func deleteTrack(trackId: UUID) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("deleteTrack called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+        let priorSidebarSelection = selectedSidebarTrackId
+
+        guard let trackIndex = priorSession.tracks.firstIndex(where: { $0.id == trackId }) else {
+            return
+        }
+        var newSession = priorSession
+        newSession.tracks.remove(at: trackIndex)
+        documentBinding.wrappedValue.session = newSession
+
+        // Clear point selection if it touched the deleted track —
+        // PointReferences pointing at a no-longer-existing track
+        // would just be stale and operations would silently skip
+        // them, but cleaner to drop them from the canonical state.
+        let prunedRefs = selection.points.filter { $0.trackId != trackId }
+        if prunedRefs.count != selection.points.count {
+            selection = Selection(points: prunedRefs)
+        }
+
+        // Clear sidebar selection if it pointed at the deleted track.
+        if selectedSidebarTrackId == trackId {
+            selectedSidebarTrackId = nil
+        }
+
+        // Register undo restoring the prior session AND the prior
+        // selection (point + sidebar).  registerUndoToRestore handles
+        // session + point-selection;  the sidebar bit we set
+        // explicitly here so the inverse closure restores it too.
+        let priorSidebarCapture = priorSidebarSelection
+        registerUndoToRestore(session: priorSession, selection: priorSelection, actionName: "Delete Track")
+        if let undoManager = undoManager {
+            undoManager.registerUndo(withTarget: self) { vm in
+                vm.selectedSidebarTrackId = priorSidebarCapture
+            }
+        }
+    }
+
+    /// Zoom the map view to fit the named track's bounds.  Computes
+    /// the lat/lon envelope from the track's points and dispatches
+    /// a `zoom_to_bounds` bridge message via the published trigger
+    /// that MapView's coordinator observes.  No-op if the trackId
+    /// doesn't resolve, the track has no segments, or every segment
+    /// is empty (no points → no bounds).
+    func zoomToTrack(trackId: UUID) {
+        guard let doc = documentBinding?.wrappedValue else {
+            logger.warning("zoomToTrack called with no document binding")
+            return
+        }
+        guard let track = doc.session.tracks.first(where: { $0.id == trackId }) else {
+            return
+        }
+        guard let bounds = Self.boundingBox(of: track) else {
+            // Empty track or all-empty segments — nothing to zoom to.
+            logger.info("zoomToTrack: track \(trackId.uuidString, privacy: .public) has no points to bound")
+            return
+        }
+        zoomBoundsTrigger = ZoomBoundsTrigger(id: UUID(), bounds: bounds)
+    }
+
+    /// Compute the lat/lon bounding box of every point in every
+    /// segment of the track.  Returns nil if there are no points.
+    /// Static — pure function of the track.
+    private static func boundingBox(of track: Track) -> GeographicBounds? {
+        var north: Double = -.greatestFiniteMagnitude
+        var south: Double = .greatestFiniteMagnitude
+        var east: Double = -.greatestFiniteMagnitude
+        var west: Double = .greatestFiniteMagnitude
+        var sawAny = false
+        for segment in track.segments {
+            for point in segment.points {
+                sawAny = true
+                if point.latitude > north { north = point.latitude }
+                if point.latitude < south { south = point.latitude }
+                if point.longitude > east { east = point.longitude }
+                if point.longitude < west { west = point.longitude }
+            }
+        }
+        guard sawAny else { return nil }
+        return GeographicBounds(north: north, south: south, east: east, west: west)
+    }
+
     // MARK: - Undo plumbing
 
     /// Register an undo that restores the supplied (session, selection)
@@ -1152,4 +1293,30 @@ struct PinToGroundRequest: Identifiable {
         let latitude: Double
         let longitude: Double
     }
+}
+
+// MARK: - Zoom bounds (M7.5)
+//
+// Geometric envelope used by the `zoom_to_bounds` bridge message.
+// Pure data;  not part of the saved document (zoom is transient
+// view state, like selection).  WGS84 decimal degrees.
+
+/// Lat/lon bounding box.  `north > south` and `east > west` is the
+/// caller's responsibility (Leaflet tolerates the inverse but the
+/// result wouldn't match user intent).
+struct GeographicBounds: Equatable, Sendable {
+    let north: Double
+    let south: Double
+    let east: Double
+    let west: Double
+}
+
+/// One-shot trigger wrapper for the zoom_to_bounds bridge message.
+/// The fresh-UUID-per-call id makes Equatable comparisons in
+/// SwiftUI's update cycle treat each invocation as a distinct
+/// event, so MapView's coordinator dispatches once per call —
+/// even if the user requests the same bounds twice in a row.
+struct ZoomBoundsTrigger: Equatable, Sendable {
+    let id: UUID
+    let bounds: GeographicBounds
 }

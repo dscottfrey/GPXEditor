@@ -129,6 +129,7 @@ public enum OutboundMessage {
     case setTool(SetToolPayload)                        // M3 — tool switch from menu
     case previewTrim(PreviewTrimPayload)                // M6 — Trim Track live preview
     case clearTrimPreview(ClearTrimPreviewPayload)      // M6 — Trim Track dialog dismissal
+    case zoomToBounds(ZoomToBoundsPayload)              // M7.5 — sidebar "Zoom to Fit"
     // Future-milestone cases (declared here as they come online):
     // case renderBrushPreview(RenderBrushPreviewPayload)  // M4
     // case clearBrushPreview                              // M4
@@ -145,6 +146,7 @@ public enum OutboundMessage {
         case .setTool: return "set_tool"
         case .previewTrim: return "preview_trim"
         case .clearTrimPreview: return "clear_trim_preview"
+        case .zoomToBounds: return "zoom_to_bounds"
         }
     }
 
@@ -173,6 +175,7 @@ public enum OutboundMessage {
         case .setTool(let p): payloadData = try encoder.encode(p)
         case .previewTrim(let p): payloadData = try encoder.encode(p)
         case .clearTrimPreview(let p): payloadData = try encoder.encode(p)
+        case .zoomToBounds(let p): payloadData = try encoder.encode(p)
         }
 
         // Round-trip the payload through JSONSerialization so we can
