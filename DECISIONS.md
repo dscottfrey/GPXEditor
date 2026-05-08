@@ -301,6 +301,20 @@ The entry format is: a section heading with the decision number and a short noun
 
 ---
 
+## D-020: OpenTopoData dataset choice for v1
+
+**Status:** Accepted (2026-05-08)
+
+**Decision:** GPXeditor's Pin to Ground and Snap to Ground features query elevation from the public **OpenTopoData** service (`api.opentopodata.org`) using the **`mapzen` dataset**.  `mapzen` is OpenTopoData's hosted blend of Mapzen Terrain Tiles — itself a global blend of SRTM, ASTER, GMTED2010, NED, EU-DEM and ETOPO1 — picked per location for best available coverage.  Public-server limits are honored: ≤1 request/second, ≤1000 requests/day.  Dataset choice is hardcoded in v1;  no user-facing picker.
+
+**Alternatives considered:** `aster30m` (global ASTER 30m DEM, better at high latitudes but coarser elsewhere); `srtm30m` (limited to ±60° latitude — excludes Alaska, much of Canada, Scandinavia); `ned10m` (US-only 10m NED — finer resolution but no use abroad); self-hosted OpenTopoData server (would remove rate limits but adds infrastructure burden incompatible with a give-away utility); rolling our own DEM service (out of scope — the project's value is in the editing UI, not DEM hosting); a Settings-level dataset picker (rejected for v1 per Occam's Razor — invites questions ("what's the difference between aster30m and srtm30m?") that the v1 give-away utility shouldn't have to answer);  ship one default, observe real use, iterate.
+
+**Rationale:** `mapzen` covers everywhere a hiker / cyclist might go without forcing the user to choose a DEM by region.  The blend quietly picks the best-resolution source per location — good in the US (NED), good in the EU (EU-DEM), good elsewhere (ASTER, SRTM, ETOPO1 fallback for ocean).  Picking a single globally-usable, free-tier-friendly dataset satisfies the M7 "selection or whole-master" Pin to Ground use case without dataset-management UI complexity.  A future Settings-level picker is in HANDOFF.md's deferred parking lot if real users hit cases the v1 default doesn't fit.
+
+**Consequences:** `Services/ElevationService.swift` bakes `mapzen` into the request URL via the `dataset` static constant.  Allow-list enforcement against `api.opentopodata.org` happens in the same file before every request — `NetworkAllowList.swiftSideEndpoints` is the single source of truth and a regression test (`ElevationServiceTests.hostIsAllowListed`) ties the two together so changing one without the other breaks loudly.  Per-batch rate limiting is enforced via an actor-isolated `nextAllowedRequestTime` clock that defers each outbound request to honor the 1-req/sec gap;  a 500-point Pin operation runs as 5 batches over ~5 seconds plus latency.  On a 429 response with Retry-After header the service waits per the header and retries once before surfacing `ElevationServiceError.rateLimited`.  The User-Agent set on the URLSession matches the WebView's UA per SECURITY.md "Identifying User-Agent" — `GPXeditor/<sha>+ (+<repo URL>)`.  No SECURITY.md change is required for this decision because the host (`api.opentopodata.org`) was already named in the network allow-list at M2 in anticipation of M7.
+
+---
+
 ## End of accepted decisions
 
-Add new decisions below this line as D-020 onward. Maintain the same format and the append-only rule.
+Add new decisions below this line as D-021 onward. Maintain the same format and the append-only rule.

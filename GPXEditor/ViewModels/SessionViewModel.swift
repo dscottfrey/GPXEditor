@@ -81,6 +81,15 @@ final class SessionViewModel: ObservableObject {
     /// sends only when the value changes.
     @Published var trimPreviewGroups: [TrimTrackOperation.PreviewGroup]? = nil
 
+    /// Pending Pin-to-Ground sheet request (M7).  Non-nil while the
+    /// confirm-and-progress sheet is presented;  the sheet drives an
+    /// async ElevationService loop and calls back into
+    /// applyPinToGround on success.  Triggered by the Edit menu's
+    /// "Pin to Ground…" item;  the scope (selection or whole-master)
+    /// is decided by requestPinToGround per the selection-aware-
+    /// operations rule in CONVENTIONS.md.
+    @Published var pinToGroundRequest: PinToGroundRequest? = nil
+
     // MARK: - Bridges to the SwiftUI environment
 
     /// Weak reference to the window's UndoManager.  ContentView
@@ -729,6 +738,261 @@ final class SessionViewModel: ObservableObject {
         selection = Selection(points: refs)
     }
 
+    // MARK: - Pin to Ground / Snap to Ground / Properties of This Location (M7)
+
+    /// Open the Pin to Ground sheet.  Resolves the scope per the
+    /// selection-aware-operations rule (CONVENTIONS.md):  if a
+    /// selection exists, the operation runs against it;  otherwise it
+    /// runs against the master track if one is tagged.  At M7 the
+    /// master tagging UI doesn't exist yet (lands at M9), so the
+    /// no-selection-no-master branch surfaces a clear NSAlert
+    /// nudging the user toward selection-based use until M9.
+    func requestPinToGround() {
+        guard let documentBinding = documentBinding else {
+            logger.warning("requestPinToGround called with no document binding")
+            return
+        }
+        let session = documentBinding.wrappedValue.session
+
+        // Resolve refs + scope description.
+        let refs: [Selection.PointReference]
+        let scope: PinToGroundRequest.Scope
+
+        if !selection.isEmpty {
+            refs = Array(selection.points)
+            scope = .selection(pointCount: refs.count)
+        } else if let master = session.tracks.first(where: { $0.role == .master }) {
+            refs = Self.allPointReferences(of: master)
+            scope = .wholeTrack(trackName: master.name, pointCount: refs.count)
+        } else {
+            // Neither selection nor master available.  At M7 this is
+            // the typical state — master tagging is M9 work.  The
+            // alert points at the workable path (select first).
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "Pin to Ground needs a selection or a master track."
+            alert.informativeText = "Select the points to pin (⌘A selects every point), then choose Pin to Ground.  Whole-track pinning will be available once master-track tagging lands."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        // Snapshot current lat/lon for each ref — the sheet sends
+        // these to OpenTopoData.  Drop any ref whose (track,
+        // segment, index) is somehow stale (shouldn't happen for a
+        // selection just resolved from current state, but defensive).
+        var queries: [PinToGroundRequest.PointQuery] = []
+        for ref in refs {
+            if let track = session.tracks.first(where: { $0.id == ref.trackId }),
+               let segment = track.segments.first(where: { $0.id == ref.segmentId }),
+               ref.pointIndex >= 0, ref.pointIndex < segment.points.count {
+                let point = segment.points[ref.pointIndex]
+                queries.append(.init(
+                    reference: ref,
+                    latitude: point.latitude,
+                    longitude: point.longitude
+                ))
+            }
+        }
+        guard !queries.isEmpty else {
+            logger.warning("requestPinToGround: scope resolved to zero queries")
+            return
+        }
+
+        pinToGroundRequest = PinToGroundRequest(scope: scope, queries: queries)
+    }
+
+    /// Synchronous commit of a Pin-to-Ground (or Snap-to-Ground)
+    /// operation.  Snapshots prior state, applies the pure operation,
+    /// registers an undo entry with the supplied action name.  No-op
+    /// if the operation didn't actually change anything (touched
+    /// list empty) — avoids spurious undo entries when the queried
+    /// elevations matched what was already there.
+    func applyPinToGround(
+        refs: [Selection.PointReference],
+        newElevations: [Double?],
+        actionName: String = "Pin to Ground"
+    ) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applyPinToGround called with no document binding")
+            return
+        }
+        let priorSession = documentBinding.wrappedValue.session
+        let priorSelection = selection
+
+        let result = PinToGroundOperation.apply(
+            to: priorSession,
+            references: refs,
+            newElevations: newElevations
+        )
+        if result.touched.isEmpty {
+            // Nothing actually changed — don't dirty the document or
+            // push an undo entry.  Sheet dismissal is feedback enough.
+            logger.info("applyPinToGround: no-op (touched list empty)")
+            return
+        }
+
+        documentBinding.wrappedValue.session = result.session
+        registerUndoToRestore(
+            session: priorSession,
+            selection: priorSelection,
+            actionName: actionName
+        )
+    }
+
+    /// Single-point Snap to Ground from the right-click context menu.
+    /// Async because it touches the network.  On success applies via
+    /// applyPinToGround;  on error surfaces an NSAlert.  No sheet —
+    /// one-point lookups are fast enough that a progress UI is
+    /// overkill.
+    func applySnapToGround(trackId: UUID, segmentId: UUID, pointIndex: Int) {
+        guard let documentBinding = documentBinding else {
+            logger.warning("applySnapToGround called with no document binding")
+            return
+        }
+        let session = documentBinding.wrappedValue.session
+        guard let track = session.tracks.first(where: { $0.id == trackId }),
+              let segment = track.segments.first(where: { $0.id == segmentId }),
+              pointIndex >= 0, pointIndex < segment.points.count
+        else {
+            logger.warning("applySnapToGround: stale (track, segment, index)")
+            return
+        }
+        let lat = segment.points[pointIndex].latitude
+        let lon = segment.points[pointIndex].longitude
+        let ref = Selection.PointReference(
+            trackId: trackId, segmentId: segmentId, pointIndex: pointIndex
+        )
+
+        Task { [weak self] in
+            do {
+                let service = ElevationService()
+                let result = try await service.fetchElevations(for: [
+                    ElevationQuery(latitude: lat, longitude: lon)
+                ])
+                let newEle = result.first ?? nil
+                await MainActor.run {
+                    guard let self = self else { return }
+                    if let newEle = newEle {
+                        self.applyPinToGround(
+                            refs: [ref],
+                            newElevations: [newEle],
+                            actionName: "Snap to Ground"
+                        )
+                    } else {
+                        self.surfaceNoElevationDataAlert()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.surfaceElevationErrorAlert(error, contextDescription: "Snap to Ground")
+                }
+            }
+        }
+    }
+
+    /// "Properties of This Location" right-click empty-space action.
+    /// Looks up DEM elevation for the named point and presents an
+    /// informational NSAlert with lat / lon / elevation.  Async
+    /// because it touches the network.
+    func showPropertiesOfLocation(latitude: Double, longitude: Double) {
+        Task { [weak self] in
+            do {
+                let service = ElevationService()
+                let result = try await service.fetchElevations(for: [
+                    ElevationQuery(latitude: latitude, longitude: longitude)
+                ])
+                let elevation = result.first ?? nil
+                await MainActor.run {
+                    self?.surfaceLocationProperties(
+                        latitude: latitude,
+                        longitude: longitude,
+                        elevation: elevation
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    self?.surfaceElevationErrorAlert(error, contextDescription: "Properties of This Location")
+                }
+            }
+        }
+    }
+
+    /// Walk every (track, segment, index) inside the supplied track
+    /// and return a list of references.  Used by Pin to Ground's
+    /// whole-master scope to enumerate every point.  Static because
+    /// it doesn't depend on view-model state — it's a pure function
+    /// of the track.
+    private static func allPointReferences(of track: Track) -> [Selection.PointReference] {
+        var refs: [Selection.PointReference] = []
+        for segment in track.segments {
+            for i in segment.points.indices {
+                refs.append(Selection.PointReference(
+                    trackId: track.id,
+                    segmentId: segment.id,
+                    pointIndex: i
+                ))
+            }
+        }
+        return refs
+    }
+
+    /// Surface an elevation-service error via NSAlert.  Per
+    /// CONVENTIONS.md "describe, don't accuse" the message describes
+    /// what was attempted and what was observed — the user's network
+    /// or input isn't pronounced "broken."
+    private func surfaceElevationErrorAlert(_ error: Error, contextDescription: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "\(contextDescription) could not complete."
+        // ElevationServiceError's localizedDescription already follows
+        // the describe-don't-accuse pattern;  other errors fall through
+        // to their default description.
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Surface a "the lookup succeeded but the DEM has no value here"
+    /// alert.  Distinguished from the error path because this is not
+    /// an error — the service did its job, the underlying DEM just
+    /// has no data at the requested location.
+    private func surfaceNoElevationDataAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "No elevation data at that location."
+        alert.informativeText = "OpenTopoData's mapzen dataset returned no elevation for the requested point.  This is unusual on land but can occur at far-offshore locations or in regions outside the underlying DEM's coverage."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Present the "Properties of This Location" informational alert
+    /// — lat / lon / elevation in a compact format.  Elevation is
+    /// shown as "—" when the DEM has no data at that location, which
+    /// is more honest than 0 or "N/A."
+    private func surfaceLocationProperties(latitude: Double, longitude: Double, elevation: Double?) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Properties of This Location"
+        let latString = String(format: "%.6f", latitude)
+        let lonString = String(format: "%.6f", longitude)
+        let eleString: String
+        if let elevation = elevation {
+            eleString = String(format: "%.1f m", elevation)
+        } else {
+            eleString = "—  (no DEM data at this location)"
+        }
+        alert.informativeText = """
+        Latitude: \(latString)
+        Longitude: \(lonString)
+        Elevation: \(eleString)
+
+        Elevation values come from OpenTopoData's mapzen dataset (a global SRTM / ASTER / NED / EU-DEM blend).
+        """
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     // MARK: - Undo plumbing
 
     /// Register an undo that restores the supplied (session, selection)
@@ -772,27 +1036,23 @@ final class SessionViewModel: ObservableObject {
     }
 }
 
-// MARK: - FocusedValues plumbing
+// MARK: - Scene-level publication
 //
-// Parallel to the document binding plumbing in AppCommands.swift,
-// SessionViewModel is published into FocusedValues so menu commands
-// (Edit > Delete, ⌘A, ⇧⌘A, ⌘E, ⌘2) can find the active window's
-// view model when triggered from the menu bar.  ContentView publishes
-// the value on the focused scene;  AppCommands consumes via
-// @FocusedObject (or @FocusedValue for the optional case).
-
-private struct SessionViewModelFocusedValueKey: FocusedValueKey {
-    typealias Value = SessionViewModel
-}
-
-extension FocusedValues {
-    /// The currently-focused window's SessionViewModel, or nil when no
-    /// document window is frontmost.
-    var sessionViewModel: SessionViewModel? {
-        get { self[SessionViewModelFocusedValueKey.self] }
-        set { self[SessionViewModelFocusedValueKey.self] = newValue }
-    }
-}
+// SessionViewModel is published at scene level via
+// `.focusedSceneObject(sessionVM)` in ContentView so menu commands
+// in AppCommands.swift can find the active window's view model when
+// triggered from the menu bar.  AppCommands reads it via
+// `@FocusedObject private var sessionVM: SessionViewModel?`.
+//
+// We use the `@FocusedObject` / `.focusedSceneObject` pair (rather
+// than the older `@FocusedValue` / `.focusedSceneValue` + custom
+// FocusedValueKey extension) because @FocusedObject SUBSCRIBES to
+// the ObservableObject's @Published changes, which is what makes
+// menu commands re-evaluate their `.disabled(...)` clauses when the
+// view model's selection / activeTool / etc. changes.  @FocusedValue
+// gives you the object but doesn't observe — getting that wrong
+// produces the silent "menu commands stay disabled even after the
+// selection populates" bug we hit at M7.
 
 // MARK: - EditCoordinatesRequest
 //
@@ -845,4 +1105,51 @@ struct TrimTrackRequest: Identifiable {
     let trackId: UUID
     let trackName: String
     let timestampRange: ClosedRange<Date>
+}
+
+// MARK: - PinToGroundRequest
+//
+// Drives ContentView's .sheet(item:) presentation for the Pin-to-
+// Ground confirmation-and-progress sheet (M7).  Carries:
+//   - `scope`:  describes what the operation will run against —
+//     the current selection (point count) or a whole master track
+//     (track name + point count).  The sheet's header text is
+//     derived from this.
+//   - `queries`:  the per-point (lat, lon) snapshot that will be
+//     sent to OpenTopoData.  The PointReference is preserved so
+//     the sheet can map each returned elevation back to the right
+//     point on commit.
+//
+// The sheet runs the async ElevationService loop itself rather
+// than going through the SessionViewModel — progress reporting is
+// sheet-local SwiftUI state and would be awkward to plumb through
+// the view model.  On success the sheet calls back into
+// applyPinToGround with the parallel elevations;  on cancel the
+// in-flight Task is cancelled and the sheet dismisses without
+// committing.
+
+struct PinToGroundRequest: Identifiable {
+    let id = UUID()
+    let scope: Scope
+    let queries: [PointQuery]
+
+    /// What the operation will pin.  The sheet renders different
+    /// header text per case so the user knows whether they're
+    /// operating on a deliberate selection or implicitly on the
+    /// whole master.
+    enum Scope {
+        case selection(pointCount: Int)
+        case wholeTrack(trackName: String, pointCount: Int)
+    }
+
+    /// One point in the per-request payload — preserves the
+    /// PointReference so the sheet can map each returned elevation
+    /// back to the right point.  Lat/lon are snapshotted at request
+    /// time;  if the user moves a point mid-Pin (impossible at v1
+    /// but defensive), the snapshot is what gets queried.
+    struct PointQuery: Sendable {
+        let reference: Selection.PointReference
+        let latitude: Double
+        let longitude: Double
+    }
 }

@@ -553,6 +553,15 @@ extension MapView {
                     sessionVM?.requestEditCoordinates(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
                 })
                 menu.addItem(.separator())
+                // M7:  Snap to Ground — single-point DEM elevation
+                // correction via OpenTopoData.  Async (the Task runs
+                // inside applySnapToGround), so the menu dismisses
+                // immediately and the user sees the result land
+                // (or an alert) when the network round-trip completes.
+                menu.addItem(ClosureMenuItem(title: "Snap to Ground") { [weak sessionVM] in
+                    sessionVM?.applySnapToGround(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
+                })
+                menu.addItem(.separator())
                 menu.addItem(ClosureMenuItem(title: "Promote to Waypoint") { [weak sessionVM] in
                     sessionVM?.applyPromoteToWaypoint(trackId: trackId, segmentId: segmentId, pointIndex: pointIndex)
                 })
@@ -593,6 +602,14 @@ extension MapView {
             case .empty(let lat, let lon):
                 menu.addItem(ClosureMenuItem(title: "Place Waypoint Here") { [weak sessionVM] in
                     _ = sessionVM?.applyPlaceWaypoint(latitude: lat, longitude: lon)
+                })
+                menu.addItem(.separator())
+                // M7:  Properties of This Location — looks up DEM
+                // elevation for the empty-space click position and
+                // surfaces lat/lon/elevation in an informational
+                // NSAlert.  Async because of the network call.
+                menu.addItem(ClosureMenuItem(title: "Properties of This Location") { [weak sessionVM] in
+                    sessionVM?.showPropertiesOfLocation(latitude: lat, longitude: lon)
                 })
             }
 

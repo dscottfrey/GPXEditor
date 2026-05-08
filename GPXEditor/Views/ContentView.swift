@@ -67,7 +67,19 @@ struct ContentView: View {
             // when this window isn't frontmost, neither is visible to
             // commands.
             .focusedSceneValue(\.document, $document)
-            .focusedSceneValue(\.sessionViewModel, sessionVM)
+            // SessionViewModel must be published with `.focusedSceneObject`
+            // (and read with `@FocusedObject` in AppCommands) rather than
+            // `.focusedSceneValue` + `@FocusedValue`, because the latter
+            // pair does not subscribe to the ObservableObject's
+            // @Published changes.  Result of getting that wrong:  every
+            // selection-aware menu command (Delete, Reverse Track, Pin
+            // to Ground, etc.) reads a stale `selection.isEmpty` value
+            // and never re-evaluates after `selectAll()` populates the
+            // selection — making the menu items appear permanently
+            // disabled in fresh-untitled documents until something
+            // forces a fresh evaluation (e.g., save+reopen).  See
+            // HANDOFF.md M7 outcome notes for the diagnostic trail.
+            .focusedSceneObject(sessionVM)
             // Connect SessionViewModel to its environment dependencies.
             // .onAppear handles the first attach;  .onChange handles
             // the case where SwiftUI hands us a different undoManager
@@ -145,6 +157,25 @@ struct ContentView: View {
                     },
                     onDismiss: {
                         sessionVM.clearTrimPreview()
+                    }
+                )
+            }
+            // M7:  Pin-to-Ground confirmation-and-progress sheet.  The
+            // Edit menu's "Pin to Ground…" item (and downstream paths)
+            // sets `pinToGroundRequest`;  the sheet runs its own async
+            // ElevationService loop with progress and Cancel, then
+            // calls back into applyPinToGround with the parallel
+            // elevations on success.  The sheet manages its own
+            // network state — the view model is the commit point only.
+            .sheet(item: $sessionVM.pinToGroundRequest) { request in
+                PinToGroundSheet(
+                    request: request,
+                    onCommit: { refs, newElevations in
+                        sessionVM.applyPinToGround(
+                            refs: refs,
+                            newElevations: newElevations,
+                            actionName: "Pin to Ground"
+                        )
                     }
                 )
             }

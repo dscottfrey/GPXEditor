@@ -18,8 +18,9 @@ Cross-references to other entries are **bolded** so the doc reads as a connected
 3. [The web side — JavaScript & Leaflet](#the-web-side--javascript--leaflet)
 4. [GPX domain](#gpx-domain)
 5. [Editing model](#editing-model)
-6. [Architecture](#architecture)
-7. [Distribution & security](#distribution--security)
+6. [Elevation lookup (M7)](#elevation-lookup-m7)
+7. [Architecture](#architecture)
+8. [Distribution & security](#distribution--security)
 
 ---
 
@@ -236,6 +237,54 @@ Each brush has its own algorithm for what to do with the points in its region or
 The currently-active editing mode.  Determines what mouse drags do — Point Tool:  marquee selection;  Lasso Tool:  free-form selection;  Brush tools:  brush strokes.  Single-key keyboard shortcuts to switch (V/L/1/2/3/4);  Escape always returns to Point Tool.
 
 Code:  `Models/EditingTool.swift`.
+
+---
+
+## Elevation lookup (M7)
+
+### DEM
+
+**Digital Elevation Model.**  A grid of ground-elevation samples covering some part of the Earth — typically derived from satellite radar (SRTM, ASTER), aerial lidar (NED), or governmental survey data (EU-DEM, GMTED2010).  At any given lat/lon a DEM gives "what's the ground elevation here?"
+
+This app uses DEM elevations to correct the often-noisy elevation values that GPS devices record.  A barometric or GPS-derived recording can be off by tens of meters;  the DEM is treated as ground truth for "what was the actual elevation at this point on the trail?"
+
+### OpenTopoData
+
+A free public web service (`api.opentopodata.org`) that wraps several DEMs behind a single HTTP API.  You send it a list of `(lat, lon)` points;  it returns elevations.  Used by this app's **Pin to Ground** and **Snap to Ground** features per D-020.
+
+The public server has rate limits:  ≤1 request/second, ≤1000 requests/day.  This app honors both via its `ElevationService` actor.
+
+### `mapzen` dataset
+
+OpenTopoData's hosted blend of multiple underlying DEMs:  SRTM, ASTER, GMTED2010, NED, EU-DEM, and ETOPO1.  At any given location the blend picks the best-resolution source available (NED in the US, EU-DEM in Europe, ASTER at high latitudes, ETOPO1 fallback for ocean).  This is the dataset GPXeditor v1 uses for every elevation lookup, hardcoded per D-020.
+
+### ElevationService
+
+The Swift-side async client for OpenTopoData.  An actor (so the rate-limiter state is safe across concurrent calls) that:  builds and validates request URLs against `NetworkAllowList.swiftSideEndpoints`, throttles requests to honor the 1-req/sec gap, decodes JSON responses, retries once on 429 with the server-supplied Retry-After delay.  Per-batch fetch only — the caller drives batching via the static `makeBatches(of:)` so it can update progress UI between calls.
+
+Code:  `Services/ElevationService.swift`.
+
+### Pin to Ground
+
+The **operation** that replaces multiple points' elevations with their DEM ground values in a single batch.  Selection-aware per CONVENTIONS.md:  if the user has a selection, Pin to Ground operates on it;  otherwise it operates on the master track if one is tagged.  Surfaces a confirmation-and-progress sheet (`Components/PinToGroundSheet.swift`) because the operation is rate-limited and slow — a 500-point pin takes ~5+ seconds.
+
+Code:  `Services/PinToGroundOperation.swift` (the pure operation), `ViewModels/SessionViewModel.swift` (the request / commit plumbing), `Components/PinToGroundSheet.swift` (the sheet).
+
+### Snap to Ground
+
+The single-point version of **Pin to Ground**, available from the Point Tool's right-click context menu on any vertex.  Looks up that one point's DEM elevation and replaces it.  No sheet — one-point lookups are fast enough that a progress UI would be overkill;  errors surface as an NSAlert.
+
+Wired in `ViewModels/SessionViewModel.applySnapToGround` and `Views/MapView.swift`'s vertex right-click menu.
+
+### Properties of This Location
+
+The empty-space right-click menu's informational item — looks up the DEM elevation at the clicked lat/lon and shows it in an NSAlert with the lat / lon / elevation values.  No model mutation;  it's purely a "what is this spot?" readout.
+
+### NetworkAllowList
+
+The single source-of-truth Swift type listing every host this app is permitted to reach.  Two consumers:  `ContentRuleListBuilder` compiles the tile-server list into a `WKContentRuleList` for the WebView;  `ElevationService` validates outbound URLSession requests against the Swift-side list.  Both are kept in sync because the rule list is rebuilt from this file at startup.
+
+Code:  `Services/NetworkAllowList.swift`.
 
 ---
 

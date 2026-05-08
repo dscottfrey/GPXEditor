@@ -61,7 +61,16 @@ struct AppCommands: Commands {
     /// gives us an optional value;  we observe the whole SessionViewModel
     /// — its @Published `selection` is what enables/disables the Delete
     /// item — by reaching through the optional.
-    @FocusedValue(\.sessionViewModel) private var sessionVM: SessionViewModel?
+    // Use `@FocusedObject` (not `@FocusedValue`) so the Command bodies
+    // re-evaluate when the SessionViewModel's @Published properties
+    // change.  @FocusedValue gives you the object reference but does
+    // NOT subscribe to its changes;  result of getting that wrong:
+    // every selection-aware menu command stays disabled even after
+    // selectAll() populates the selection, until something forces a
+    // fresh evaluation cycle (e.g., save+reopen).  Companion change
+    // is in ContentView.swift's `.focusedSceneObject(sessionVM)`
+    // (replacing the prior `.focusedSceneValue(\.sessionViewModel, sessionVM)`).
+    @FocusedObject private var sessionVM: SessionViewModel?
 
     var body: some Commands {
         // Place Import GPX in the File menu, after the standard
@@ -165,6 +174,30 @@ struct AppCommands: Commands {
                 }
             }
             .disabled(sessionVM == nil || sessionVM?.selection.uniqueTrackId == nil)
+
+            Divider()
+
+            // M7 — Pin to Ground.  Selection-aware-or-master-aware:
+            // if the user has a selection OR a master track is
+            // tagged in the project, we route to requestPinToGround
+            // which builds the appropriate scope and presents the
+            // confirmation-and-progress sheet.  If neither is true
+            // (the typical M7 state, since master tagging is M9),
+            // requestPinToGround surfaces a clear NSAlert pointing
+            // the user at "select first."  The disabled-state check
+            // mirrors that:  enabled if selection exists OR a
+            // master is tagged.
+            //
+            // No keyboard shortcut at v1 — Pin to Ground is a slow,
+            // deliberate operation, not a fast keystroke target.
+            Button("Pin to Ground…") {
+                sessionVM?.requestPinToGround()
+            }
+            .disabled(
+                sessionVM == nil
+                || (sessionVM?.selection.isEmpty == true
+                    && (document?.session.tracks.contains(where: { $0.role == .master }) != true))
+            )
         }
 
         // ─── Tool menu — tool switching ──────────────────────────────
