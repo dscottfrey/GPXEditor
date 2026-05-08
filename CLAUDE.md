@@ -69,13 +69,14 @@ GPXEditor/
 │   ├── Models/                          // Tests mirror the type-kind layout
 │   ├── Services/
 │   └── Fixtures/                        // Sample GPX files — rules in Docs/06
-├── Docs/                                // Per-subsystem directive documents
+├── Docs/                                // Per-subsystem directive documents + glossary
 │   ├── 01_DOCUMENT.md                   // GPX I/O, data model, parsing/writing
 │   ├── 02_MAP_AND_BRIDGE.md             // WKWebView, JS↔Swift protocol, message types
 │   ├── 03_WEB_RESOURCES.md              // Vendored asset rules, hash protocol
 │   ├── 04_EDITING.md                    // Brushes, operations, tools
 │   ├── 05_UI.md                         // SwiftUI views, sidebar, inspector, panels
-│   └── 06_FIXTURES.md                   // Fixture rules and audit policy
+│   ├── 06_FIXTURES.md                   // Fixture rules and audit policy
+│   └── GLOSSARY.md                      // Project terminology — living reference, consult when terms are unclear
 ├── WEB_RESOURCES_HASHES.txt             // SHA-256 of vendored web assets
 ├── CLAUDE.md                            // This file
 ├── SECURITY.md
