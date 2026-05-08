@@ -638,7 +638,14 @@ extension MapView {
         /// other navigation request.  See Docs/02_MAP_AND_BRIDGE.md
         /// "WKWebView setup" — the editor is a single-page surface and
         /// has no business navigating anywhere else.
-        nonisolated func webView(
+        ///
+        /// Inherits MainActor isolation from the enclosing Coordinator
+        /// (no `nonisolated` here).  WebKit calls navigation delegates
+        /// on the main thread, and Xcode 16's SDK marks
+        /// `WKNavigationAction.request` as main-actor-required, so the
+        /// previously-nonisolated form would now fail to access
+        /// `request` directly.
+        func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
@@ -648,12 +655,7 @@ extension MapView {
                 decisionHandler(.allow)
                 return
             }
-            // Anything else is denied.  Logged in the main-actor
-            // logger via a dispatch — the delegate method is
-            // nonisolated so we can't call self.logger directly here.
-            Task { @MainActor [weak self] in
-                self?.logger.warning("Navigation blocked: \(url?.absoluteString ?? "<no url>", privacy: .public)")
-            }
+            logger.warning("Navigation blocked: \(url?.absoluteString ?? "<no url>", privacy: .public)")
             decisionHandler(.cancel)
         }
     }

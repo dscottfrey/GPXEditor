@@ -50,8 +50,16 @@ public final class MapBridge: NSObject {
     /// by the bridge so its lifetime matches.
     public let dispatcher: MessageDispatcher
 
-    public init(dispatcher: MessageDispatcher = MessageDispatcher()) {
-        self.dispatcher = dispatcher
+    /// Construct a bridge.  The dispatcher parameter defaults to nil so
+    /// the default-argument expression is a sendable literal (Swift 6
+    /// strict-concurrency forbids calling a main-actor-isolated init —
+    /// which `MessageDispatcher.init` is, by inference — from the
+    /// non-isolated default-argument evaluation context).  When the
+    /// caller passes nil (or omits the argument) the dispatcher is
+    /// constructed inside `init`, which IS main-actor-isolated, so the
+    /// MessageDispatcher() call satisfies the isolation rule.
+    public init(dispatcher: MessageDispatcher? = nil) {
+        self.dispatcher = dispatcher ?? MessageDispatcher()
         super.init()
     }
 
