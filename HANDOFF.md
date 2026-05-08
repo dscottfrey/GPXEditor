@@ -6,11 +6,11 @@ If you are starting a new session and reading this for the first time, also read
 
 ## Current status
 
-**Phase:** M7 complete (2026-05-08).  Pin to Ground (selection-or-master scope, confirmation-and-progress sheet), Snap to Ground (single-point right-click), and Properties of This Location (empty-space right-click readout) all shipped end-to-end.  D-020 records the dataset choice (`mapzen` global blend, public-server rate limits 1 req/sec / 1000/day honored).  225 test cases pass (27 new across `PinToGroundOperationTests` and `ElevationServiceTests`, no regressions).  Glossary gained an "Elevation lookup (M7)" section with entries for DEM, OpenTopoData, the `mapzen` dataset, ElevationService, Pin to Ground, Snap to Ground, Properties of This Location, and NetworkAllowList.  `xcodebuild build` and `xcodebuild test` both succeed against the Lab Code Cert development signing.
+**Phase:** M7 code complete (2026-05-08), partial verification.  Pin to Ground (selection-or-master scope, confirmation-and-progress sheet), Snap to Ground (single-point right-click), and Properties of This Location (empty-space right-click readout) all shipped end-to-end.  D-020 records the dataset choice (`mapzen` global blend, public-server rate limits 1 req/sec / 1000/day honored).  225 test cases pass (27 new across `PinToGroundOperationTests` and `ElevationServiceTests`, no regressions).  `xcodebuild build` and `xcodebuild test` both succeed.  Manual UI tests 1–2 of 11 verified;  tests 3–11 deferred until M7.5 ships the verification tools needed to inspect elevation values per point and visualise selection shape — without those, "did Pin to Ground do the right thing" is essentially infeasible to confirm by eye.  A long-standing latent bug surfaced and was fixed during M7 testing:  `AppCommands` was using `@FocusedValue` + `.focusedSceneValue` for the SessionViewModel, which gives access to the object but does NOT subscribe to its `@Published` changes — every selection-aware menu command stayed disabled even after selectAll() populated the selection until something forced a fresh evaluation cycle.  Switched to `@FocusedObject` + `.focusedSceneObject` (the API designed for ObservableObject subscription).
 
-**Next action:** **M8 — Sidebar, Inspector, Stats panel, Waypoint Place tool** (the major UI build-out).  Sidebar shows tracks → segments → waypoints with single-click-select-all-points and double-click-zoom-to-track (closes the M2-era "imports auto-fit but each track becomes a dot" pain).  Inspector becomes the per-point / per-segment / project-metadata editor;  edits propagate to the model and re-render the map.  Stats panel computes total distance, gain/loss, average/max speed, gradient histogram from the current selection or the whole project.  Waypoint Place tool (W shortcut) plus the curated icon-picker popover (~15 hiking/outdoor symbols, Garmin `<sym>` names).  Master/subsidiary tagging UI may slip into M8 to unblock Pin to Ground's whole-master scope before M9's brush work depends on it — decide at the start of M8 based on actual priority.
+**Next action:** **M7.5 — Test infrastructure pull-forward** (Track list sidebar, Inspector readout, elevation graph overlay, hover tooltip).  Pulls a minimum-sufficient subset of M8 forward to unblock proper M7 verification and address the navigation slowness that's been a friction point since M2.  Scope captured below in the roadmap section.
 
-**Blockers, if any:** None for M8–M9. M10 is gated on the Apple Developer Program membership becoming active and the Developer ID Application certificate being installed in the developer's keychain. See "Open inputs" below for the current state of the cert progress.
+**Blockers, if any:** None for M7.5–M9. M10 is gated on the Apple Developer Program membership becoming active and the Developer ID Application certificate being installed in the developer's keychain. See "Open inputs" below for the current state of the cert progress.
 
 ## Milestone roadmap
 
@@ -259,6 +259,34 @@ Tests:  27 new — `PinToGroundOperationTests` (basic apply, lat/lon/time preser
 - **No pre-flight quota tracking.**  The 1000-requests-per-day limit is honored only reactively — when OpenTopoData returns 429 we wait + retry once and surface a clear error if still rate-limited.  No client-side counter that says "you've used 487 of your 1000 requests today, large pin operations may not complete."  Could be added if real use surfaces it as a pain point;  parking lot territory.
 - **Single retry only.**  On a 429 we wait per Retry-After and try once;  a second 429 surfaces.  Multi-attempt exponential backoff is a future iteration if the public OpenTopoData server is ever observed flapping in actual use.
 - **`Selection.PointReference` Hashable warning still open.**  Carried over from M6;  the M7 pin-references plumbing uses PointReference extensively but no new warnings were introduced.  Parking-lot entry remains valid.
+
+### M7.5 — Test infrastructure pull-forward
+
+A focused, smaller-than-M8 milestone that exists because manual verification of M7's elevation features is essentially infeasible without an in-app per-point readout and a way to navigate among tracks more quickly than the current zoom-and-pan flow.  Pulls a minimum-sufficient subset of M8 forward;  the rest of M8 (full Stats panel, Waypoint Place tool, master/subsidiary tagging UI, Inspector edit fields) stays at M8.
+
+**Track list sidebar** — left side of the window, hideable via View menu.  Lists every track in the project.  Right-click each track for:
+
+- **Zoom to fit** — fits the map viewport to the track's bounds.  Drives a new `zoom_to_bounds` Swift→JS bridge message.
+- **Select all points** — replaces the current selection with every point in the named track.
+- **Delete track** — removes the track with undo.
+
+All three items also live in a top-level Track menu (or under Edit) so non-right-click users can find them.  Per CONVENTIONS.md UX principles, every right-click action is reachable via the menu bar too.
+
+**Inspector pane** — right side of the window, hideable via View menu.  Three modes at M7.5:
+
+- **Single point selected:**  read-only display of latitude / longitude / elevation / timestamp.  Edit fields wait for M8.
+- **Multi-point selection or no selection:**  collapsed / minimal — the elevation graph (below) is the primary visualization for selections.
+- **Selected track in sidebar:**  basic per-track readout (name, point count, segment count).  Per-segment mode and the full segment-color editor stay at M8.
+
+**Elevation graph overlay** — bottom of the map view, slides in from below when a non-empty selection exists, slides out when selection clears.  Wide-and-short shape suits the bottom-strip placement (vs the right-side Inspector's narrow-and-tall shape).  Built with Swift Charts.  **Non-contiguous selection** (e.g. a marquee that catches both ends of an out-and-back track) renders only the selected portions with a visible gap indicator between them — the "more magnified" form preferred for verification work, rather than showing the whole track with selection highlighted.
+
+**Hover tooltip on map** — when the cursor is within hit-test radius of a track vertex, a small tooltip shows the vertex's lat / lon / elevation.  Cheap addition that pays back massively for testing — the user can sweep over the map to spot-check elevations after a Pin to Ground operation.
+
+**Out of M7.5 scope (deferred to M8):**  Waypoint Place tool + icon picker;  full Stats panel (distance, gain/loss, average/max speed, gradient histogram);  master/subsidiary tagging UI;  Inspector edit fields;  per-segment inspector mode;  drag-to-reorder tracks in the sidebar;  hierarchical track-list rendering for split-track parent/child relationships.
+
+**Track-naming refactor (deferred — separate decision, post-M7.5):**  When a track is split, the current behaviour names the new track `"<original> (continued)"`.  User feedback (2026-05-08) prefers a hierarchical/tree view in the sidebar where the original track is the parent and the splits appear as nested children numbered `.2` / `.3` / etc.  This is a meaningful change to both the data model (track parentage) and the sidebar rendering, so it lives as its own future decision rather than getting jammed into M7.5.  Captured here so the next session knows the user has already weighed in on direction.
+
+**Verify:**  resume M7 manual test plan (tests 3–11) using the new tools.  An imported track shows up in the sidebar;  right-click → Zoom to fit centers and zooms;  right-click → Select all points populates selection;  the Inspector shows lat/lon/ele on a single-point selection;  the elevation graph appears at the bottom on multi-point selection and disappears when selection clears;  hovering a vertex shows the tooltip;  a Pin to Ground operation visibly changes the elevation graph and the per-point Inspector readout.
 
 ### M8 — Sidebar, inspector, stats panel, waypoints
 
