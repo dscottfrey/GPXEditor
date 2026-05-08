@@ -53,6 +53,26 @@
     // 8-12 px;  10 felt right for a v1 default and is tunable later.
     const VERTEX_GRAB_TOLERANCE_PX = 10;
 
+    // M7.5 hover-tooltip tolerance in CSS pixels — how close the cursor
+    // must be to a vertex to show the per-vertex tooltip with lat/lon/ele.
+    // Slightly larger than VERTEX_GRAB_TOLERANCE_PX so the tooltip
+    // surfaces a bit before you would actually grab the vertex —
+    // helpful as a "what is this point?" affordance without forcing
+    // pixel-perfect aim.
+    const VERTEX_HOVER_TOLERANCE_PX = 12;
+
+    // M7.5 click-vs-drag threshold in CSS pixels.  After mousedown on
+    // a vertex, mouseup that happens within this many pixels of the
+    // mousedown position counts as a CLICK (single-point select);
+    // anything beyond this counts as a DRAG (move the point).
+    // Without this distinction every tiny finger movement during a
+    // click commits an inadvertent Move Point — fine if the user
+    // can see the point, but invisible vertices made it the default
+    // failure mode at M7.  4 px is small enough that a deliberate
+    // drag of even a few pixels still registers, big enough that
+    // hand jitter during a click is forgiven.
+    const CLICK_DRAG_THRESHOLD_PX = 4;
+
     // ─── Brush parameters (M4) ───────────────────────────────────────────
     // Fixed for v1 per D-016 — no slider, no per-stroke tuning.  Tunable
     // values are in metres so they match the Swift-side SimplifyBrush
@@ -101,6 +121,13 @@
                                    // current bounds would drop on commit.
                                    // Replaced on each preview_trim;
                                    // cleared on clear_trim_preview.
+        hoverTooltip: null,        // M7.5:  HTMLElement floated near the
+                                   // cursor when it's within
+                                   // VERTEX_HOVER_TOLERANCE_PX of a vertex.
+                                   // Pure DOM, not a Leaflet layer — we
+                                   // append it to the map container at
+                                   // init time and toggle .display in
+                                   // updateHoverTooltip.
     };
 
     // ─── Bridge — outbound (JS -> Swift) ─────────────────────────────────
@@ -212,6 +239,9 @@
             for (const segmentLayers of trackEntry.segmentLayers.values()) {
                 segmentLayers.halo.remove();
                 segmentLayers.line.remove();
+                if (segmentLayers.vertexMarkers) {
+                    for (const m of segmentLayers.vertexMarkers) m.remove();
+                }
             }
         }
         state.tracksById.clear();
@@ -272,6 +302,9 @@
                 for (const segmentLayers of existing.segmentLayers.values()) {
                     segmentLayers.halo.remove();
                     segmentLayers.line.remove();
+                    if (segmentLayers.vertexMarkers) {
+                        for (const m of segmentLayers.vertexMarkers) m.remove();
+                    }
                 }
             }
             // Render fresh.  Replaces the entry in state.tracksById.
@@ -298,6 +331,9 @@
             for (const segmentLayers of existing.segmentLayers.values()) {
                 segmentLayers.halo.remove();
                 segmentLayers.line.remove();
+                if (segmentLayers.vertexMarkers) {
+                    for (const m of segmentLayers.vertexMarkers) m.remove();
+                }
             }
             state.tracksById.delete(trackId);
             removed += 1;
@@ -388,7 +424,58 @@
                 handlePolylineClick(trackIdForClosure, segmentIdForClosure, e);
             });
 
-            segmentLayers.set(segment.segment_id, { halo: halo, line: line });
+            // M7.5 always-visible per-vertex markers.  Small dark dots
+            // with a thin light outline so they're visible against any
+            // basemap (D-013's "color is never the only signal" rule
+            // applies — visibility is achieved through size + contrast,
+            // not through the marker color alone).  Selection markers
+            // (handleHighlightSelection) draw on top with a larger,
+            // brighter style;  a selected point reads as a blue dot
+            // covering the dim gray-black base dot underneath.
+            //
+            // `interactive: false` so the markers don't intercept
+            // polyline clicks or vertex-drag mousedown events — those
+            // continue to hit the polyline / fall through to vertexHitTest
+            // exactly as before.  This keeps the existing M5 vertex-drag
+            // and M5 click-on-line code paths untouched.
+            //
+            // Performance note:  thousands of CircleMarkers can lag
+            // Leaflet's default SVG renderer at low zoom.  Acceptable
+            // at v1 scale (handful of tracks, low thousands of points
+            // total);  if it becomes a problem the iteration paths are
+            // (a) move to L.canvas() renderer for the markers, or
+            // (b) zoom-gate the markers to high zooms only.  Both are
+            // captured in the parking lot.
+            const vertexMarkers = [];
+            for (const ll of latlngs) {
+                const m = L.circleMarker(ll, {
+                    radius: 2.5,
+                    color: '#ffffff',
+                    weight: 1,
+                    fillColor: '#000000',
+                    fillOpacity: 0.7,
+                    opacity: 0.7,
+                    interactive: false,
+                });
+                m.addTo(state.map);
+                vertexMarkers.push(m);
+            }
+
+            // Store the original points array alongside the Leaflet
+            // layers so the M7.5 hover tooltip can display per-vertex
+            // elevation / timestamp info.  The polyline itself only
+            // remembers lat/lng;  ele and time would be lost without
+            // this side store.  Still "JS is presentation" per
+            // CONVENTIONS.md — the canonical state remains in Swift —
+            // but the wire payload's full per-point data is the
+            // cheapest route to hover info, vs. round-tripping to
+            // Swift on every hover.
+            segmentLayers.set(segment.segment_id, {
+                halo: halo,
+                line: line,
+                points: segment.points,
+                vertexMarkers: vertexMarkers,
+            });
         }
         state.tracksById.set(track.track_id, {
             name: track.name,
@@ -1073,7 +1160,18 @@
         return best;
     }
 
-    function startVertexDrag(hit, latlng) {
+    // Begin a vertex interaction:  the user has pressed mouse-down
+    // on (or near) a vertex.  We don't yet know whether this is a
+    // click (select) or a drag (move) — that's decided by how far
+    // the cursor moves before mouseup.  No drag marker is created
+    // here;  it spawns lazily when (and if) drag movement crosses
+    // CLICK_DRAG_THRESHOLD_PX.
+    //
+    // `e` is the Leaflet mouse event so we can capture both the
+    // pixel position (for click-vs-drag distance computation) and
+    // the original DOM event (for shift / option modifier on a
+    // click-to-select).
+    function startVertexDrag(hit, e) {
         const segmentLayers = hit.segmentLayers;
         const originalLatLngs = segmentLayers.line.getLatLngs().map(ll => L.latLng(ll.lat, ll.lng));
 
@@ -1083,27 +1181,48 @@
             pointIndex: hit.pointIndex,
             segmentLayers: segmentLayers,
             originalLatLngs: originalLatLngs,
-            // A small visible marker at the cursor while the user drags
-            // (the polyline updates live too, but a marker reinforces
-            // "this is the point you're moving").
-            marker: L.circleMarker(latlng, {
+            downPx: state.map.latLngToContainerPoint(e.latlng),
+            modifier: getClickModifierKey(e.originalEvent),
+            // wasDragged stays false until movement crosses the
+            // click-vs-drag threshold;  controls all the
+            // drag-specific UI (marker, polyline rewriting) so a
+            // click that happens to wiggle a pixel doesn't flicker
+            // the polyline.
+            wasDragged: false,
+            marker: null,
+        };
+        state.map.dragging.disable();
+    }
+
+    function updateVertexDrag(e) {
+        if (!state.vertexDrag) return;
+        const drag = state.vertexDrag;
+        const cursorPx = state.map.latLngToContainerPoint(e.latlng);
+
+        if (!drag.wasDragged) {
+            // Still in "could be a click" territory.  Only promote
+            // to a drag once movement crosses the threshold.
+            if (cursorPx.distanceTo(drag.downPx) < CLICK_DRAG_THRESHOLD_PX) {
+                return;
+            }
+            // Crossed the threshold — promote to drag.  Lazy-create
+            // the drag marker now so it doesn't appear during a
+            // click.  Initial polyline rewrite happens immediately
+            // so the user sees the point follow the cursor on the
+            // very mousemove that promoted it.
+            drag.wasDragged = true;
+            drag.marker = L.circleMarker(e.latlng, {
                 radius: 6,
                 color: '#ffffff',
                 weight: 2,
                 fillColor: '#3b82f6',
                 fillOpacity: 1.0,
                 interactive: false,
-            }).addTo(state.map),
-        };
-        state.map.dragging.disable();
-        // Reflect the initial cursor position into the polyline so
-        // there's no visual snap on first mousemove.
-        applyVertexDragPosition(latlng);
-    }
+            }).addTo(state.map);
+        }
 
-    function updateVertexDrag(e) {
-        if (!state.vertexDrag) return;
-        state.vertexDrag.marker.setLatLng(e.latlng);
+        // Active drag — update marker and polyline.
+        drag.marker.setLatLng(e.latlng);
         applyVertexDragPosition(e.latlng);
     }
 
@@ -1118,30 +1237,62 @@
     function commitVertexDrag(e) {
         if (!state.vertexDrag) return;
         const drag = state.vertexDrag;
-        const finalLatLng = e ? e.latlng : drag.marker.getLatLng();
-        clearVertexDrag();
 
-        postToSwift({
-            type: 'move_point',
-            payload: {
-                track_id: drag.trackId,
-                segment_id: drag.segmentId,
-                point_index: drag.pointIndex,
-                lat: finalLatLng.lat,
-                lon: finalLatLng.lng,
-            },
-        });
+        if (drag.wasDragged) {
+            // Drag commit:  the polyline has been updated live;
+            // post move_point so Swift can apply + broadcast.
+            const finalLatLng = e ? e.latlng : drag.marker.getLatLng();
+            clearVertexDrag();
+            postToSwift({
+                type: 'move_point',
+                payload: {
+                    track_id: drag.trackId,
+                    segment_id: drag.segmentId,
+                    point_index: drag.pointIndex,
+                    lat: finalLatLng.lat,
+                    lon: finalLatLng.lng,
+                },
+            });
+        } else {
+            // Click commit:  no drag movement, treat as a single-
+            // point selection.  Modifier (replace / add / subtract)
+            // came from the keyboard state at mousedown.
+            const trackId = drag.trackId;
+            const segmentId = drag.segmentId;
+            const pointIndex = drag.pointIndex;
+            const modifier = drag.modifier;
+            clearVertexDrag();
+            postToSwift({
+                type: 'points_selected',
+                payload: {
+                    modifier: modifier,
+                    selection: [{
+                        track_id: trackId,
+                        segment_id: segmentId,
+                        point_indices: [pointIndex],
+                    }],
+                },
+            });
+        }
     }
 
     function clearVertexDrag() {
         if (state.vertexDrag) {
-            // Restore the polyline to its original state — Swift's
-            // update_tracks will re-render with the canonical result
-            // moments later, so this avoids a transient visual that
-            // doesn't match the final state if Swift drops the move.
-            state.vertexDrag.segmentLayers.line.setLatLngs(state.vertexDrag.originalLatLngs);
-            state.vertexDrag.segmentLayers.halo.setLatLngs(state.vertexDrag.originalLatLngs);
-            state.vertexDrag.marker.remove();
+            const drag = state.vertexDrag;
+            // If we had escalated to a drag, restore the polyline
+            // to its original state — Swift's update_tracks will
+            // re-render with the canonical result moments later, so
+            // this avoids a transient visual that doesn't match the
+            // final state if Swift drops the move.  If we never
+            // escalated (click-only), nothing was changed and there's
+            // no restore needed.
+            if (drag.wasDragged) {
+                drag.segmentLayers.line.setLatLngs(drag.originalLatLngs);
+                drag.segmentLayers.halo.setLatLngs(drag.originalLatLngs);
+            }
+            if (drag.marker) {
+                drag.marker.remove();
+            }
             state.vertexDrag = null;
         }
         state.map.dragging.enable();
@@ -1228,13 +1379,32 @@
     }
 
     function getModifierKey(originalEvent) {
-        // Shift = add to existing selection.
-        // Alt/Option = subtract from existing selection.
-        // Neither = replace.
-        // (Cmd is reserved for menu shortcuts and isn't a selection
-        // modifier here — Photoshop convention.)
+        // Marquee / lasso modifier convention (Photoshop-style):
+        //   Shift = add to existing selection.
+        //   Alt/Option = subtract from existing selection.
+        //   Neither = replace.
+        // Used by drag-shaped selection gestures (marquee, lasso).
+        // Vertex CLICKS use a different convention — see
+        // getClickModifierKey below.
         if (originalEvent.shiftKey) return 'add';
         if (originalEvent.altKey) return 'subtract';
+        return 'replace';
+    }
+
+    // M7.5 vertex-click modifier convention (Apple Finder-style):
+    //   Shift-click = range, extend selection from anchor to clicked
+    //                 vertex inclusive within the same segment.
+    //   Cmd-click   = toggle, XOR the clicked vertex with the
+    //                 selection (add if absent, remove if present).
+    //   Plain click = replace, single-point selection.
+    // This is intentionally different from the marquee/lasso modifier
+    // convention because individual-vertex selection in a long
+    // sequence reads more naturally as Finder-style range/toggle than
+    // as Photoshop-style add/subtract.  ⌘ is `metaKey` in JavaScript
+    // on macOS;  Alt/Option has no role in click selection.
+    function getClickModifierKey(originalEvent) {
+        if (originalEvent.shiftKey) return 'range';
+        if (originalEvent.metaKey) return 'toggle';
         return 'replace';
     }
 
@@ -1378,12 +1548,15 @@
             // and the preview rendering differ, both of which are
             // already keyed off state.brush.type.
             if (state.currentTool === 'point') {
-                // Vertex drag takes priority over marquee — if the
-                // mousedown landed on a vertex, the user wants to
-                // move that point, not start a selection.
+                // Vertex drag-or-click takes priority over marquee —
+                // if the mousedown landed on a vertex, the user
+                // either wants to move that point (drag) or select
+                // it (click).  Click-vs-drag is decided at mouseup
+                // based on movement distance;  see startVertexDrag
+                // / updateVertexDrag / commitVertexDrag.
                 const hit = vertexHitTest(e.latlng);
                 if (hit) {
-                    startVertexDrag(hit, e.latlng);
+                    startVertexDrag(hit, e);
                 } else {
                     startMarquee(e);
                 }
@@ -1408,14 +1581,19 @@
                 state.brushCursor.setLatLng(e.latlng);
                 showBrushCursor();
             }
+            // M7.5 hover tooltip.  Suppresses itself internally when
+            // any committing gesture is active, so safe to call
+            // unconditionally here.
+            updateHoverTooltip(e);
         });
 
-        // Hide the brush cursor when the mouse leaves the map (e.g.,
-        // moves over a SwiftUI overlay or out of the window) so it
-        // doesn't get stuck at the last in-bounds position.  Show
-        // again on mouseover.
+        // Hide the brush cursor AND the hover tooltip when the mouse
+        // leaves the map (e.g., moves over a SwiftUI overlay or out
+        // of the window) so neither gets stuck at the last in-bounds
+        // position.  Show again on mouseover.
         state.map.on('mouseout', function () {
             if (state.brushCursor) hideBrushCursor();
+            hideHoverTooltip();
         });
         state.map.on('mouseover', function (e) {
             if (state.brushCursor && !state.brush) {
@@ -1499,6 +1677,7 @@
         }).setView([0, 0], 2);
 
         attachMapHandlers();
+        createHoverTooltip();
         // Apply the cursor for the default tool (point → arrow) so
         // the user doesn't briefly see Leaflet's grab cursor before
         // any set_tool message arrives.
@@ -1512,6 +1691,106 @@
             type: 'ready',
             payload: { editor_version: EDITOR_VERSION },
         });
+    }
+
+    // ─── Hover tooltip (M7.5) ────────────────────────────────────────────
+    //
+    // Pure JS-side feature.  When the cursor is within
+    // VERTEX_HOVER_TOLERANCE_PX of a vertex AND no gesture is in
+    // flight (drag / marquee / lasso / brush), a small tooltip
+    // appears near the cursor with that vertex's lat / lon / ele.
+    // No bridge traffic — the points data was stashed alongside the
+    // Leaflet layers in renderTrack so per-hover Swift round-trips
+    // aren't needed (which would be far too chatty).
+
+    function createHoverTooltip() {
+        const tip = document.createElement('div');
+        tip.className = 'vertex-hover-tooltip';
+        tip.style.position = 'absolute';
+        tip.style.zIndex = '700';        // above polylines, below modals
+        tip.style.pointerEvents = 'none'; // never intercept clicks
+        tip.style.display = 'none';
+        tip.style.background = 'rgba(20, 20, 20, 0.92)';
+        tip.style.color = '#ffffff';
+        tip.style.padding = '4px 7px';
+        tip.style.borderRadius = '4px';
+        tip.style.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+        tip.style.lineHeight = '1.35';
+        tip.style.whiteSpace = 'nowrap';
+        tip.style.boxShadow = '0 1px 4px rgba(0,0,0,0.25)';
+        state.map.getContainer().appendChild(tip);
+        state.hoverTooltip = tip;
+    }
+
+    function updateHoverTooltip(e) {
+        // Suppress while any committing gesture is in flight — a
+        // drag / marquee / etc. moves quickly and the tooltip would
+        // be visual noise.  Spacebar-pan also suppresses since the
+        // user is in pan mode, not "what's this point?" mode.
+        if (state.vertexDrag || state.marquee || state.lasso
+            || state.brush || state.spacebarHeld) {
+            hideHoverTooltip();
+            return;
+        }
+        const hit = vertexHitTestForHover(e.latlng);
+        if (!hit) {
+            hideHoverTooltip();
+            return;
+        }
+        // Build the tooltip text.  Lat/lon to 6 decimals (≈11 cm at
+        // the equator, plenty);  elevation in meters or em-dash if
+        // the source GPX had no recorded elevation at this point.
+        const point = hit.point;
+        const eleStr = (typeof point.ele === 'number')
+            ? `${point.ele.toFixed(1)} m`
+            : '— (no elevation)';
+        const lines = [
+            `${point.lat.toFixed(6)}°, ${point.lon.toFixed(6)}°`,
+            eleStr,
+        ];
+        state.hoverTooltip.innerHTML = lines.join('<br>');
+
+        // Position near the cursor, offset down-and-right so the
+        // arrow doesn't cover the tooltip.  containerPoint is in
+        // the map container's coordinate space, which matches
+        // the parent we appended to.
+        const cp = state.map.latLngToContainerPoint(e.latlng);
+        const offsetX = 14;
+        const offsetY = 8;
+        state.hoverTooltip.style.left = `${cp.x + offsetX}px`;
+        state.hoverTooltip.style.top = `${cp.y + offsetY}px`;
+        state.hoverTooltip.style.display = 'block';
+    }
+
+    function hideHoverTooltip() {
+        if (state.hoverTooltip) {
+            state.hoverTooltip.style.display = 'none';
+        }
+    }
+
+    // Variant of vertexHitTest that uses the slightly-wider hover
+    // tolerance and additionally returns the original point data
+    // (lat/lon/ele/time) the tooltip wants to display.  Lookup uses
+    // the points array stashed in segmentLayers by renderTrack.
+    function vertexHitTestForHover(latlng) {
+        const cursorPx = state.map.latLngToContainerPoint(latlng);
+        let bestDist = VERTEX_HOVER_TOLERANCE_PX;
+        let best = null;
+        for (const [, trackEntry] of state.tracksById) {
+            for (const [, segmentLayers] of trackEntry.segmentLayers) {
+                const latlngs = segmentLayers.line.getLatLngs();
+                const points = segmentLayers.points || [];
+                for (let i = 0; i < latlngs.length; i++) {
+                    const vpx = state.map.latLngToContainerPoint(latlngs[i]);
+                    const d = cursorPx.distanceTo(vpx);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = { point: points[i] };
+                    }
+                }
+            }
+        }
+        return best;
     }
 
     init();

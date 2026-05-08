@@ -484,9 +484,28 @@ extension MapView {
             }
 
             switch payload.modifier {
-            case .replace: sessionVM.selection.replace(with: refs)
-            case .add: sessionVM.selection.add(refs)
-            case .subtract: sessionVM.selection.subtract(refs)
+            case .replace:
+                sessionVM.selection.replace(with: refs)
+            case .add:
+                sessionVM.selection.add(refs)
+            case .subtract:
+                sessionVM.selection.subtract(refs)
+            case .toggle:
+                // ⌘-click on a vertex — wire payload should be a
+                // single point.  Defensive:  if the wire format
+                // somehow carries multiple points, toggle each in
+                // turn (anchor ends at the last toggled point).
+                for ref in refs {
+                    sessionVM.selection.toggle(ref)
+                }
+            case .range:
+                // Shift-click on a vertex — extend from anchor to
+                // clicked point.  Wire payload should be a single
+                // point;  if multiple, only the first drives range
+                // (the others would be ambiguous extension targets).
+                if let target = refs.first {
+                    sessionVM.selection.extendRange(to: target)
+                }
             }
         }
 

@@ -117,13 +117,26 @@ public struct PointsSelectedPayload: Decodable {
 }
 
 /// How a points_selected gesture combines with the existing selection.
-/// Plain click / drag is `replace`;  shift modifier is `add`;  option
-/// modifier is `subtract`.  Snake_case raw values match the wire shape
-/// directly.
+///
+/// Marquee / lasso:  plain drag is `replace`;  shift-drag is `add`;
+/// option-drag is `subtract` — Photoshop convention, kept as-is for
+/// drag-shaped gestures.
+///
+/// Vertex click (M7.5):  plain click is `replace` (single-point);
+/// shift-click is `range` (extend from anchor — Apple convention);
+/// ⌘-click is `toggle` (XOR a single point — Apple convention).  The
+/// vertex-click path is intentionally Apple-flavored rather than
+/// Photoshop-flavored because individual vertex selection in a
+/// long sequence (e.g., picking a range of trail points to operate
+/// on) maps naturally onto Finder's range / toggle convention.
+///
+/// Snake_case raw values match the wire shape directly.
 public enum SelectionModifier: String, Decodable, Sendable {
     case replace
     case add
     case subtract
+    case toggle
+    case range
 }
 
 /// Payload for the `delete_points` inbound message.  This is the path

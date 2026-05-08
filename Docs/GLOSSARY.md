@@ -19,8 +19,9 @@ Cross-references to other entries are **bolded** so the doc reads as a connected
 4. [GPX domain](#gpx-domain)
 5. [Editing model](#editing-model)
 6. [Elevation lookup (M7)](#elevation-lookup-m7)
-7. [Architecture](#architecture)
-8. [Distribution & security](#distribution--security)
+7. [Window panes (M7.5)](#window-panes-m75)
+8. [Architecture](#architecture)
+9. [Distribution & security](#distribution--security)
 
 ---
 
@@ -285,6 +286,55 @@ The empty-space right-click menu's informational item — looks up the DEM eleva
 The single source-of-truth Swift type listing every host this app is permitted to reach.  Two consumers:  `ContentRuleListBuilder` compiles the tile-server list into a `WKContentRuleList` for the WebView;  `ElevationService` validates outbound URLSession requests against the Swift-side list.  Both are kept in sync because the rule list is rebuilt from this file at startup.
 
 Code:  `Services/NetworkAllowList.swift`.
+
+---
+
+## Window panes (M7.5)
+
+### Sidebar / Track list
+
+The **left pane** of the document window — a list of every track in the project, with the track's name, point count, segment count, and a Master/Subsidiary badge if the track has a role.  Hideable via the toolbar's standard sidebar-toggle button (and the View menu's auto-generated Show/Hide Sidebar entry).
+
+Click a row to select that track for the **Inspector**'s track-context mode.  Right-click a row for **Zoom to Fit**, **Select All Points**, or **Delete Track** — the same actions are also reachable from the **Track menu** in the menu bar.
+
+Code:  `Views/Sidebar.swift`.
+
+### Inspector
+
+The **right pane** of the document window — a context-sensitive readout panel.  Hideable via the toolbar's inspector-toggle button.
+
+Four modes, picked by what the user has currently selected:
+
+- **Single point selected** — lat / lon / elevation / timestamp readout.  The primary surface for verifying that **Pin to Ground** / **Snap to Ground** changed elevations correctly.
+- **Multi-point selection** — count + segment count.  The **elevation graph** below the map is the rich view for multi-point selections;  the inspector defers to it.
+- **Track selected in the sidebar** — track name, point counts, role, recorded date.
+- **Nothing selected** — basic project metadata (track count, basemap).
+
+Read-only at M7.5;  edit fields land at M8.
+
+Code:  `Views/Inspector.swift`.
+
+### Elevation graph
+
+A wide-and-short Swift Charts view overlaid at the **bottom of the map view**.  Slides into view when the selection is non-empty, slides out when the selection clears.
+
+For non-contiguous selections (e.g., a marquee that catches both ends of an out-and-back trail), the graph renders each contiguous run as a separate **series** in Swift Charts — which doesn't connect lines between series, so the gaps appear naturally as visual breaks.  X-axis is cumulative haversine distance with fixed inter-run gaps so the runs separate visibly without dominating the chart.  Y-axis is elevation in meters.
+
+Code:  `Components/ElevationGraph.swift`.
+
+### Hover tooltip
+
+A small DOM tooltip that floats near the cursor when it's within ~12 px of a track vertex on the map, showing that vertex's lat / lon and elevation.  Pure JS-side feature — no Swift bridge traffic per hover (would be too chatty);  the per-vertex data is stashed alongside the Leaflet layers when **`load_session`** / **`update_tracks`** lands.
+
+Suppresses itself during any active gesture (vertex drag, marquee, lasso, brush, spacebar-pan) so it doesn't add visual noise during commit operations.
+
+Code:  `WebResources/editor.js` (`createHoverTooltip` / `updateHoverTooltip` / `vertexHitTestForHover`).
+
+### `zoom_to_bounds` (bridge message)
+
+Swift→JS outbound message sent when the user invokes "Zoom to Fit" on a track in the **sidebar** (or — eventually — ⌘2 "Zoom to Selection" from the deferred parking lot).  Payload carries the lat/lon envelope (north / south / east / west);  JS calls Leaflet's `map.fitBounds` with 40 px padding so the requested region renders fully visible without kissing the viewport edges.
+
+Driven from Swift via `SessionViewModel.zoomBoundsTrigger` — a one-shot trigger value that mints a fresh UUID per call, so two zooms to the same bounds re-fit instead of being deduped.
 
 ---
 

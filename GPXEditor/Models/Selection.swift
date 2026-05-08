@@ -45,8 +45,22 @@ public struct Selection: Equatable, Sendable {
     /// same point can never appear twice.
     public private(set) var points: Set<PointReference>
 
-    public init(points: Set<PointReference> = []) {
+    /// The selection's "anchor" — the most recent single-point click
+    /// that established the current selection's reference frame.  Used
+    /// by shift-click range extension (Apple convention):  shift-click
+    /// selects every point from `anchor` to the clicked point inclusive,
+    /// within the same (track, segment).  Replaced when a single-point
+    /// click or toggle commits;  unchanged by range extensions and by
+    /// marquee/lasso add/subtract;  cleared on multi-point replace and
+    /// on `clear()`.
+    ///
+    /// Anchor is purely transient view state — same as `points`.  Not
+    /// part of the saved document.
+    public private(set) var anchor: PointReference?
+
+    public init(points: Set<PointReference> = [], anchor: PointReference? = nil) {
         self.points = points
+        self.anchor = anchor
     }
 
     /// Whether anything is currently selected.  Cheaper to express this
@@ -80,28 +94,99 @@ public struct Selection: Equatable, Sendable {
 
     // MARK: - Mutations
 
-    /// Replace the selection with a new set.  Plain mouse-click on the
-    /// map sends this modifier;  it discards any previous selection.
+    /// Replace the selection with a new set.  Plain mouse-click on a
+    /// vertex sends a single-point replace;  marquee / lasso plain
+    /// commits send a multi-point replace.  Anchor follows the input:
+    /// single-point replace sets anchor to that point (so a subsequent
+    /// shift-click can range-extend from there);  multi-point replace
+    /// (marquee / lasso) clears anchor — the marquee gesture didn't
+    /// establish an unambiguous "anchor" point.
     public mutating func replace(with newPoints: [PointReference]) {
         points = Set(newPoints)
+        if newPoints.count == 1 {
+            anchor = newPoints[0]
+        } else {
+            anchor = nil
+        }
     }
 
-    /// Add to the existing selection.  Shift-click sends this modifier.
+    /// Add to the existing selection.  Marquee / lasso shift-drag sends
+    /// this modifier.  Anchor is unchanged — adding to a selection
+    /// doesn't redefine the anchor, the user is extending what they
+    /// already had.
     public mutating func add(_ newPoints: [PointReference]) {
         for p in newPoints { points.insert(p) }
     }
 
-    /// Remove specific points from the existing selection.  Option-click
-    /// sends this modifier.  Points not in the selection are silently
-    /// skipped — set subtraction semantics, no error case.
+    /// Remove specific points from the existing selection.  Marquee /
+    /// lasso option-drag sends this modifier.  Points not in the
+    /// selection are silently skipped — set subtraction semantics, no
+    /// error case.  Anchor is unchanged unless the anchor point itself
+    /// is being subtracted, in which case it's cleared.
     public mutating func subtract(_ removedPoints: [PointReference]) {
+        let removed = Set(removedPoints)
         for p in removedPoints { points.remove(p) }
+        if let a = anchor, removed.contains(a) {
+            anchor = nil
+        }
+    }
+
+    /// Toggle membership of a single clicked point — Apple ⌘-click
+    /// convention.  If the point is currently selected, remove it;
+    /// otherwise add it.  Anchor is set to the clicked point in either
+    /// case (it becomes the new range-extension reference for any
+    /// subsequent shift-click).
+    public mutating func toggle(_ ref: PointReference) {
+        if points.contains(ref) {
+            points.remove(ref)
+        } else {
+            points.insert(ref)
+        }
+        anchor = ref
+    }
+
+    /// Extend the selection from the current anchor to the clicked
+    /// point inclusive — Apple shift-click convention.  Within the
+    /// same (track, segment), selects every index from
+    /// `min(anchor.idx, ref.idx)` to `max(...)`.  If anchor is nil OR
+    /// in a different (track, segment), falls back to plain replace
+    /// semantics (selection becomes just the clicked point, anchor =
+    /// clicked) — cross-segment "range" has no natural definition for
+    /// points-in-segments and Apple's range gesture is intra-list
+    /// anyway.  Anchor is preserved when the range applies cleanly so
+    /// repeated shift-clicks all extend from the same origin (which is
+    /// the Finder behavior the user expects).
+    public mutating func extendRange(to ref: PointReference) {
+        guard let anchor = anchor else {
+            // No anchor — treat as plain click, set anchor to clicked.
+            replace(with: [ref])
+            return
+        }
+        if anchor.trackId != ref.trackId || anchor.segmentId != ref.segmentId {
+            // Cross-segment range falls back to plain replace.
+            replace(with: [ref])
+            return
+        }
+        let lo = min(anchor.pointIndex, ref.pointIndex)
+        let hi = max(anchor.pointIndex, ref.pointIndex)
+        var newRefs: Set<PointReference> = []
+        for i in lo...hi {
+            newRefs.insert(PointReference(
+                trackId: ref.trackId,
+                segmentId: ref.segmentId,
+                pointIndex: i
+            ))
+        }
+        points = newRefs
+        // anchor preserved — successive shift-clicks all extend from
+        // the same anchor (Apple convention).
     }
 
     /// Drop everything.  ⇧⌘A (deselect all) takes this path;  Delete
-    /// uses it after the deletion completes.
+    /// uses it after the deletion completes.  Also clears the anchor.
     public mutating func clear() {
         points.removeAll(keepingCapacity: false)
+        anchor = nil
     }
 
     // MARK: - Wire format conversion
